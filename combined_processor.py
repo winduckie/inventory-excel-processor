@@ -138,9 +138,26 @@ class CombinedProcessor:
             with open('config/product_categories.csv', 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(['Product', 'Category'])
-                for product, category in sorted(categories.items()):
+                
+                # Separate categorized and uncategorized products
+                categorized = {}
+                uncategorized = {}
+                
+                for product, category in categories.items():
+                    if category and category.strip():  # Has a category
+                        categorized[product] = category
+                    else:  # No category or empty category
+                        uncategorized[product] = category
+                
+                # Sort categorized products alphabetically and write them first
+                for product, category in sorted(categorized.items()):
                     writer.writerow([product, category])
-            logger.info(f"Saved {len(categories)} product categories")
+                
+                # Sort uncategorized products alphabetically and write them at the bottom
+                for product, category in sorted(uncategorized.items()):
+                    writer.writerow([product, category])
+                
+            logger.info(f"Saved {len(categories)} product categories ({len(categorized)} categorized, {len(uncategorized)} uncategorized)")
         except Exception as e:
             logger.error(f"Error saving product categories: {e}")
     
