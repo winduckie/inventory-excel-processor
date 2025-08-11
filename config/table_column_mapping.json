@@ -1,0 +1,36 @@
+{
+  "table_column_mapping": {
+    "LANDED": {
+      "product_column": "PRODUCT",
+      "quantity_column": "INVOICE QTY(MT)"
+    },
+    "PULLOUT": {
+      "product_column": "PRODUCT", 
+      "quantity_column": "INVOICE QTY(MT)"
+    },
+    "SAILING": {
+      "product_column": "PRODUCT",
+      "quantity_column": "BL QTY(MT)"
+    },
+    "UNSERVED_IMPORTED": {
+      "product_column": "PRODUCT",
+      "quantity_column": "BL QTY(MT)"
+    },
+    "UNSERVED_LOCAL": {
+      "product_column": "RAW MATERIALS",
+      "quantity_column": "STILL TO BE DELIVERED (in kilos)"
+    },
+    "LANDED.PULL OUT": {
+      "product_column": "PRODUCT",
+      "quantity_column": "INVOICE QTY(MT)"
+    },
+    "UNSERVED CONTRACT": {
+      "product_column": "PRODUCT",
+      "quantity_column": "BL QTY(MT)"
+    }
+  },
+  "notes": {
+    "summary_table": "SUMMARY table is ignored as per user request",
+    "description": "This mapping defines the product and quantity columns for each table in the Excel processor"
+  }
+} 
