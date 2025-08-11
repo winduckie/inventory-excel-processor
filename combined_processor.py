@@ -52,6 +52,37 @@ class CombinedProcessor:
         self.inventory_data = {}
         self.column_mapping = self._load_column_mapping()
         
+        # Extract date from input folder for organized output
+        self.input_date = self._extract_date_from_input_path()
+        self.output_dir = f"processed_data/{self.input_date}" if self.input_date else "processed_data"
+        
+    def _extract_date_from_input_path(self) -> str:
+        """
+        Extract date from input folder path (e.g., input/20250811 -> 20250811)
+        
+        Returns:
+            str: Date string or empty string if no date found
+        """
+        import os
+        import re
+        
+        # Get the directory containing the delivery file
+        delivery_dir = os.path.dirname(self.delivery_file)
+        
+        # Look for date pattern in the path (YYYYMMDD)
+        date_pattern = r'(\d{8})'
+        match = re.search(date_pattern, delivery_dir)
+        
+        if match:
+            date_str = match.group(1)
+            logger.info(f"Detected date from input path: {date_str}")
+            return date_str
+        
+        # If no date found, try to get current date
+        current_date = datetime.now().strftime('%Y%m%d')
+        logger.info(f"No date found in input path, using current date: {current_date}")
+        return current_date
+        
     def _load_column_mapping(self) -> Dict:
         """
         Load the column mapping from JSON file.
@@ -711,17 +742,22 @@ class CombinedProcessor:
             logger.warning("No data to combine")
             return pd.DataFrame(columns=['PRODUCT', 'QUANTITY', 'STATUS', 'CATEGORY'])
     
-    def save_processed_data(self, output_dir: str = "processed_data"):
+    def save_processed_data(self, output_dir: str = None):
         """
         Save all processed data to CSV files.
         
         Args:
-            output_dir (str): Directory to save the processed data
+            output_dir (str): Directory to save the processed data. If None, uses self.output_dir
         """
         import os
         
+        # Use instance output directory if none specified
+        if output_dir is None:
+            output_dir = self.output_dir
+        
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Saving processed data to: {output_dir}")
         
         # Save delivery data
         for sheet_name, df in self.delivery_data.items():
@@ -837,20 +873,25 @@ class CombinedProcessor:
             logger.error(f"Error creating pivot table: {e}")
             return pd.DataFrame()
     
-    def save_pivot_table(self, pivot_df: pd.DataFrame, output_dir: str = "processed_data"):
+    def save_pivot_table(self, pivot_df: pd.DataFrame, output_dir: str = None):
         """
         Save the pivot table to CSV and Excel files.
         
         Args:
             pivot_df (pd.DataFrame): Pivot table to save
-            output_dir (str): Directory to save the pivot table
+            output_dir (str): Directory to save the pivot table. If None, uses self.output_dir
         """
         if pivot_df.empty:
             logger.warning("No pivot table to save")
             return
         
+        # Use instance output directory if none specified
+        if output_dir is None:
+            output_dir = self.output_dir
+        
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Saving pivot table to: {output_dir}")
         
         # Save to CSV
         csv_file = os.path.join(output_dir, "PIVOT_TABLE.csv")
@@ -1014,7 +1055,7 @@ def main():
     
     # Save combined data
     if not combined_df.empty:
-        combined_file = os.path.join("processed_data", "COMBINED_ALL_DATA.csv")
+        combined_file = os.path.join(processor.output_dir, "COMBINED_ALL_DATA.csv")
         combined_df.to_csv(combined_file, index=False)
         logger.info(f"Saved combined data to {combined_file}")
         print(f"\n=== COMBINED DATA SUMMARY ===")
