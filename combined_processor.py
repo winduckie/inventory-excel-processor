@@ -144,9 +144,9 @@ class CombinedProcessor:
                 uncategorized = {}
                 
                 for product, category in categories.items():
-                    if category and category.strip():  # Has a category
+                    if category and category.strip() and category.strip().upper() != 'N/A':  # Has a valid category
                         categorized[product] = category
-                    else:  # No category or empty category
+                    else:  # No category, empty category, or N/A
                         uncategorized[product] = category
                 
                 # Sort categorized products alphabetically and write them first
@@ -157,7 +157,12 @@ class CombinedProcessor:
                 for product, category in sorted(uncategorized.items()):
                     writer.writerow([product, category])
                 
-            logger.info(f"Saved {len(categories)} product categories ({len(categorized)} categorized, {len(uncategorized)} uncategorized)")
+            # Log details about uncategorized/NA products
+            if uncategorized:
+                uncategorized_list = ', '.join(sorted(uncategorized.keys()))
+                logger.info(f"Uncategorized/NA products: {uncategorized_list}")
+            
+            logger.info(f"Saved {len(categories)} product categories ({len(categorized)} categorized, {len(uncategorized)} uncategorized/NA)")
         except Exception as e:
             logger.error(f"Error saving product categories: {e}")
     
@@ -676,10 +681,16 @@ class CombinedProcessor:
                     # Track blank categories
                     if not category:
                         blank_categories.append(product)
+                        logger.debug(f"Product '{product}' has blank category")
+                    elif category.strip().upper() == 'N/A':
+                        logger.debug(f"Product '{product}' has N/A category")
+                    else:
+                        logger.debug(f"Product '{product}' categorized as: {category}")
                 else:
                     # New product found
                     new_products.add(product)
                     table_data.at[idx, 'CATEGORY'] = ''
+                    logger.debug(f"New product found: '{product}' (no category assigned)")
             
             combined_data.append(table_data)
             logger.info(f"Added {len(table_data)} rows from {table_name}")
@@ -753,6 +764,22 @@ class CombinedProcessor:
                 for product in sorted(unique_blank):
                     print(f"  - {product}")
                 print("Please edit product_categories.csv to add categories for these products.")
+            
+            # Log category summary
+            if not final_df.empty:
+                category_counts = final_df['CATEGORY'].value_counts()
+                logger.info("Category breakdown in combined data:")
+                for category, count in category_counts.items():
+                    if category and category.strip():
+                        logger.info(f"  {category}: {count} products")
+                    else:
+                        logger.info(f"  No category: {count} products")
+                
+                # Check for N/A categories specifically
+                na_count = len(final_df[final_df['CATEGORY'] == 'N/A'])
+                if na_count > 0:
+                    na_products = final_df[final_df['CATEGORY'] == 'N/A']['PRODUCT'].unique()
+                    logger.info(f"N/A category products ({na_count}): {', '.join(sorted(na_products))}")
             
             return final_df
         else:
@@ -863,10 +890,27 @@ class CombinedProcessor:
         combined_df['CATEGORY'] = combined_df['CATEGORY'].fillna('Uncategorized')
         combined_df['CATEGORY'] = combined_df['CATEGORY'].replace('', 'Uncategorized')
         
-        # Create pivot table
+        # Filter out products with 'N/A' category for pivot table
+        original_count = len(combined_df)
+        combined_df_filtered = combined_df[combined_df['CATEGORY'] != 'N/A'].copy()
+        filtered_count = len(combined_df_filtered)
+        excluded_count = original_count - filtered_count
+        
+        if excluded_count > 0:
+            # Get the specific products with N/A category
+            na_products = combined_df[combined_df['CATEGORY'] == 'N/A']['PRODUCT'].unique()
+            na_products_list = ', '.join(sorted(na_products))
+            
+            logger.info(f"Excluded {excluded_count} products with 'N/A' category from pivot table")
+            logger.info(f"N/A products: {na_products_list}")
+            logger.info(f"Pivot table will show {filtered_count} products (out of {original_count} total)")
+        else:
+            logger.info(f"All {original_count} products have valid categories for pivot table")
+        
+        # Create pivot table using filtered data
         try:
             pivot_table = pd.pivot_table(
-                combined_df,
+                combined_df_filtered,
                 values='QUANTITY',
                 index='CATEGORY',
                 columns='STATUS',
@@ -1084,6 +1128,14 @@ def main():
         
         # Create and save pivot table
         print(f"\n=== CREATING PIVOT TABLE ===")
+        
+        # Check for N/A categories before creating pivot table
+        na_count = len(combined_df[combined_df['CATEGORY'] == 'N/A'])
+        if na_count > 0:
+            na_products = combined_df[combined_df['CATEGORY'] == 'N/A']['PRODUCT'].unique()
+            print(f"⚠️  Found {na_count} products with 'N/A' category - these will be excluded from pivot table")
+            print(f"📋 N/A products: {', '.join(sorted(na_products))}")
+        
         pivot_table = processor.create_pivot_table(combined_df)
         
         if not pivot_table.empty:

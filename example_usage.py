@@ -93,6 +93,14 @@ def process_with_date_folders():
         
         # Create and save pivot table
         print(f"\n📊 Creating pivot table...")
+        
+        # Check for N/A categories before creating pivot table
+        na_count = len(combined_df[combined_df['CATEGORY'] == 'N/A'])
+        if na_count > 0:
+            na_products = combined_df[combined_df['CATEGORY'] == 'N/A']['PRODUCT'].unique()
+            print(f"⚠️  Found {na_count} products with 'N/A' category - these will be excluded from pivot table")
+            print(f"📋 N/A products: {', '.join(sorted(na_products))}")
+        
         pivot_table = processor.create_pivot_table(combined_df)
         
         if not pivot_table.empty:
