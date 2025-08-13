@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Combined Excel Processor
+Combined Excel Processor with Global Usage Integration
 
-A processor that combines delivery and inventory data from multiple Excel files.
+A processor that combines delivery and inventory data from multiple Excel files,
+plus global usage data for enhanced inventory projections.
 """
 
 import pandas as pd
@@ -35,21 +36,25 @@ logger.info(f"Logging to file: {log_filename}")
 
 class CombinedProcessor:
     """
-    A class to process and combine delivery and inventory data.
+    A class to process and combine delivery, inventory, and global usage data.
     """
     
-    def __init__(self, delivery_file: str, inventory_file: str):
+    def __init__(self, delivery_file: str, inventory_file: str, global_usage_file: str = None):
         """
         Initialize the Combined processor.
         
         Args:
             delivery_file (str): Path to the delivery Excel file
             inventory_file (str): Path to the inventory Excel file
+            global_usage_file (str, optional): Path to the global usage CSV file
         """
         self.delivery_file = delivery_file
         self.inventory_file = inventory_file
+        self.global_usage_file = global_usage_file
         self.delivery_data = {}
         self.inventory_data = {}
+        self.global_usage_data = {}
+        self.ingredient_mapping = {}
         self.column_mapping = self._load_column_mapping()
         
         # Extract date from input folder for organized output
@@ -125,6 +130,211 @@ class CombinedProcessor:
         except Exception as e:
             logger.error(f"Error loading product categories: {e}")
             return {}
+    
+    def _load_global_usage_data(self) -> Dict[str, pd.DataFrame]:
+        """
+        Load global usage data from CSV file.
+        
+        Returns:
+            Dict[str, pd.DataFrame]: Dictionary containing the global usage data
+        """
+        if not self.global_usage_file:
+            logger.info("No global usage file specified, skipping global usage processing")
+            return {}
+            
+        try:
+            # Read the CSV file
+            df = pd.read_csv(self.global_usage_file, encoding='utf-8')
+            logger.info(f"Loaded global usage data with {len(df)} rows")
+            
+            # Clean the data
+            df = self._clean_global_usage_data(df)
+            
+            # Store the processed data
+            self.global_usage_data['global_usage'] = df
+            
+            logger.info(f"Processed global usage data: {df.shape}")
+            logger.info(f"Columns: {list(df.columns)}")
+            
+            return self.global_usage_data
+            
+        except Exception as e:
+            logger.error(f"Error loading global usage data: {e}")
+            return {}
+    
+    def _clean_global_usage_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Clean and process the global usage data.
+        
+        Args:
+            df (pd.DataFrame): Raw global usage data
+            
+        Returns:
+            pd.DataFrame: Cleaned global usage data
+        """
+        if df.empty:
+            return df
+        
+        df_clean = df.copy()
+        
+        # Clean ingredient names - handle the actual column name with extra spaces
+        ingredient_name_col = 'Ingredient  Name'  # Note the double space
+        if ingredient_name_col in df_clean.columns:
+            df_clean['Ingredient Name'] = df_clean[ingredient_name_col].str.strip()
+            # Remove rows with empty ingredient names
+            df_clean = df_clean[df_clean['Ingredient Name'].notna() & (df_clean['Ingredient Name'] != '')]
+        
+        # Clean ingredient amounts - convert to numeric, handling commas
+        if 'Ingredient Amount' in df_clean.columns:
+            df_clean['Ingredient Amount'] = df_clean['Ingredient Amount'].astype(str)
+            df_clean['Ingredient Amount'] = df_clean['Ingredient Amount'].str.replace(',', '')
+            df_clean['Ingredient Amount'] = pd.to_numeric(df_clean['Ingredient Amount'], errors='coerce')
+            # Fill NaN with 0
+            df_clean['Ingredient Amount'] = df_clean['Ingredient Amount'].fillna(0)
+        
+        # Clean ingredient stock - convert to numeric, handling commas
+        if 'Ingredient Stock' in df_clean.columns:
+            df_clean['Ingredient Stock'] = df_clean['Ingredient Stock'].astype(str)
+            df_clean['Ingredient Stock'] = df_clean['Ingredient Stock'].str.replace(',', '')
+            df_clean['Ingredient Stock'] = pd.to_numeric(df_clean['Ingredient Stock'], errors='coerce')
+            # Fill NaN with 0
+            df_clean['Ingredient Stock'] = df_clean['Ingredient Stock'].fillna(0)
+        
+        logger.info(f"Cleaned global usage data: {df_clean.shape}")
+        return df_clean
+    
+    def _create_ingredient_mapping(self) -> Dict[str, str]:
+        """
+        Create a mapping between ingredient names and product names from product categories.
+        New ingredients will be added to product_categories.csv for manual categorization later.
+        
+        Returns:
+            Dict[str, str]: Mapping from ingredient names to product names
+        """
+        if not self.global_usage_file:
+            return {}
+            
+        try:
+            # Load product categories
+            product_categories = self._load_product_categories()
+            
+            # Create ingredient mapping
+            ingredient_mapping = {}
+            new_ingredients = []
+            
+            # Load global usage data if not already loaded
+            if not self.global_usage_data:
+                self._load_global_usage_data()
+            
+            if 'global_usage' in self.global_usage_data:
+                global_df = self.global_usage_data['global_usage']
+                
+                for _, row in global_df.iterrows():
+                    ingredient_name = row.get('Ingredient Name', '')
+                    if pd.notna(ingredient_name) and ingredient_name != '':
+                        # Only use exact matches
+                        if ingredient_name in product_categories:
+                            ingredient_mapping[ingredient_name] = ingredient_name
+                            logger.debug(f"Exact match found: '{ingredient_name}' -> '{ingredient_name}'")
+                        else:
+                            # No exact match found, treat ingredient as a new product
+                            ingredient_mapping[ingredient_name] = ingredient_name
+                            new_ingredients.append(ingredient_name)
+                            logger.debug(f"No exact match for ingredient '{ingredient_name}', will add as new product")
+            
+            self.ingredient_mapping = ingredient_mapping
+            
+            # Add new ingredients to product_categories.csv for manual categorization
+            if new_ingredients:
+                self._add_new_ingredients_to_categories(new_ingredients)
+                logger.info(f"Added {len(new_ingredients)} new ingredients to product_categories.csv for manual categorization")
+            
+            logger.info(f"Created ingredient mapping with {len(ingredient_mapping)} entries")
+            if new_ingredients:
+                logger.info(f"New ingredients added: {', '.join(new_ingredients)}")
+            
+            return ingredient_mapping
+            
+        except Exception as e:
+            logger.error(f"Error creating ingredient mapping: {e}")
+            return {}
+    
+    def _add_new_ingredients_to_categories(self, new_ingredients: List[str]):
+        """
+        Add new ingredients to product_categories.csv with 'N/A' category for manual editing later.
+        
+        Args:
+            new_ingredients (List[str]): List of new ingredient names to add
+        """
+        try:
+            # Load existing categories
+            existing_categories = self._load_product_categories()
+            
+            # Add new ingredients with 'N/A' category
+            for ingredient in new_ingredients:
+                if ingredient not in existing_categories:
+                    existing_categories[ingredient] = 'N/A'
+            
+            # Save updated categories
+            self._save_product_categories(existing_categories)
+            
+            logger.info(f"Added {len(new_ingredients)} new ingredients to product categories")
+            
+        except Exception as e:
+            logger.error(f"Error adding new ingredients to categories: {e}")
+    
+    def _calculate_monthly_usage(self, ingredient_name: str) -> float:
+        """
+        Calculate monthly usage for a given ingredient.
+        
+        Args:
+            ingredient_name (str): Name of the ingredient
+            
+        Returns:
+            float: Monthly usage amount in tons (converted from kg)
+        """
+        try:
+            if 'global_usage' not in self.global_usage_data:
+                return 0.0
+            
+            global_df = self.global_usage_data['global_usage']
+            
+            # Find the ingredient in global usage data
+            ingredient_row = global_df[global_df['Ingredient Name'] == ingredient_name]
+            
+            if not ingredient_row.empty:
+                amount = ingredient_row.iloc[0].get('Ingredient Amount', 0)
+                if pd.notna(amount):
+                    # Convert to monthly usage (assuming the amount is annual)
+                    monthly_usage_kg = amount / 12.0
+                    # Convert from kg to tons by dividing by 1000
+                    monthly_usage_tons = monthly_usage_kg / 1000.0
+                    return monthly_usage_tons
+            
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"Error calculating monthly usage for {ingredient_name}: {e}")
+            return 0.0
+    
+    def _calculate_projected_inventory(self, total_inventory: float, monthly_usage: float, months: int) -> float:
+        """
+        Calculate projected inventory for a given number of months.
+        
+        Args:
+            total_inventory (float): Total current inventory
+            monthly_usage (float): Monthly usage amount
+            months (int): Number of months to project
+            
+        Returns:
+            float: Projected inventory after specified months
+        """
+        try:
+            projected = total_inventory - (monthly_usage * months)
+            return projected
+        except Exception as e:
+            logger.error(f"Error calculating projected inventory: {e}")
+            return total_inventory
     
     def _save_product_categories(self, categories: Dict[str, str]):
         """
@@ -559,16 +769,34 @@ class CombinedProcessor:
     
     def process_all_data(self) -> Dict[str, pd.DataFrame]:
         """
-        Process all delivery and inventory data.
+        Process all data including delivery, inventory, and global usage if available.
         
         Returns:
-            Dict[str, pd.DataFrame]: Dictionary of processed dataframes
+            Dict[str, pd.DataFrame]: Dictionary containing all processed data
+        """
+        # Process delivery data
+        self._process_delivery_data()
+        
+        # Process inventory data
+        self._process_inventory_data()
+        
+        # Process global usage data if available
+        if self.global_usage_file:
+            self._load_global_usage_data()
+        
+        # Combine all results
+        all_results = {**self.delivery_data, **self.inventory_data, **self.global_usage_data}
+        
+        logger.info(f"Processed all data: {len(all_results)} datasets")
+        return all_results
+    
+    def _process_delivery_data(self):
+        """
+        Process all delivery data sheets.
         """
         # Load delivery file
         delivery_excel = pd.ExcelFile(self.delivery_file)
         logger.info(f"Available delivery sheets: {delivery_excel.sheet_names}")
-        
-        results = {}
         
         # Process delivery sheets
         for sheet_name in delivery_excel.sheet_names:
@@ -578,9 +806,9 @@ class CombinedProcessor:
                 # Auto-detect and split LANDED/PULLOUT combined sheets
                 landed_df, pullout_df = self.process_landed_pullout_sheet(sheet_name)
                 if not landed_df.empty:
-                    results['LANDED'] = landed_df
+                    self.delivery_data['LANDED'] = landed_df
                 if not pullout_df.empty:
-                    results['PULLOUT'] = pullout_df
+                    self.delivery_data['PULLOUT'] = pullout_df
             else:
                 # Standard processing for other sheets
                 df = self.process_delivery_sheet(sheet_name)
@@ -588,17 +816,15 @@ class CombinedProcessor:
                     # Validate columns if mapping exists
                     if sheet_name in self.column_mapping:
                         self._validate_required_columns(df, sheet_name)
-                    results[sheet_name] = df
-        
-        # Process inventory data
+                    self.delivery_data[sheet_name] = df
+    
+    def _process_inventory_data(self):
+        """
+        Process inventory data.
+        """
         inventory_df = self.process_inventory_sheet()
         if not inventory_df.empty:
-            results['INVENTORY'] = inventory_df
-        
-        self.delivery_data = {k: v for k, v in results.items() if k != 'INVENTORY'}
-        self.inventory_data = {'INVENTORY': inventory_df} if not inventory_df.empty else {}
-        
-        return results
+            self.inventory_data['INVENTORY'] = inventory_df
     
     def combine_all_data(self) -> pd.DataFrame:
         """
@@ -934,6 +1160,110 @@ class CombinedProcessor:
             logger.error(f"Error creating pivot table: {e}")
             return pd.DataFrame()
     
+    def create_enhanced_pivot_table(self, combined_df: pd.DataFrame = None) -> pd.DataFrame:
+        """
+        Create an enhanced pivot table with monthly usage and projected inventory.
+        
+        Args:
+            combined_df (pd.DataFrame, optional): Combined dataframe. If None, will use self.combine_all_data()
+            
+        Returns:
+            pd.DataFrame: Enhanced pivot table with usage and projections
+        """
+        if combined_df is None:
+            combined_df = self.combine_all_data()
+        
+        if combined_df.empty:
+            logger.warning("No data available for enhanced pivot table")
+            return pd.DataFrame()
+        
+        # Create the base pivot table
+        base_pivot = self.create_pivot_table(combined_df)
+        
+        if base_pivot.empty:
+            logger.warning("No base pivot table available for enhancement")
+            return pd.DataFrame()
+        
+        # Create enhanced pivot table
+        enhanced_pivot = base_pivot.copy()
+        
+        # Add Monthly Usage column
+        enhanced_pivot['Monthly Usage'] = 0.0
+        
+        # Add projection columns
+        for month in range(1, 7):
+            enhanced_pivot[f'{month} Month Projection'] = 0.0
+        
+        # Process global usage data if available
+        if self.global_usage_file and 'global_usage' in self.global_usage_data:
+            # Create category-based usage mapping
+            category_usage = {}
+            
+            # Load product categories to map ingredients to categories
+            product_categories = self._load_product_categories()
+            
+            # Process each ingredient
+            for ingredient_name in self.global_usage_data['global_usage']['Ingredient Name'].unique():
+                # Calculate monthly usage for this ingredient
+                monthly_usage = self._calculate_monthly_usage(ingredient_name)
+                
+                # Find what category this ingredient belongs to
+                category = None
+                if ingredient_name in product_categories:
+                    category = product_categories[ingredient_name]
+                else:
+                    # If no category found, use ingredient name as category (will be added to product_categories.csv)
+                    category = ingredient_name
+                    # Add to product categories for manual editing later
+                    self._add_new_ingredients_to_categories([ingredient_name])
+                
+                # Sum usage by category
+                if category in category_usage:
+                    category_usage[category] += monthly_usage
+                else:
+                    category_usage[category] = monthly_usage
+            
+            # Add monthly usage to existing categories or create new category rows
+            for category, total_usage in category_usage.items():
+                if category in enhanced_pivot.index:
+                    # Category exists, add monthly usage
+                    enhanced_pivot.loc[category, 'Monthly Usage'] = total_usage
+                else:
+                    # Category doesn't exist, create new row
+                    new_row = pd.Series(0.0, index=enhanced_pivot.columns)
+                    new_row['Monthly Usage'] = total_usage
+                    enhanced_pivot.loc[category] = new_row
+            
+            # Calculate projections for all categories
+            for category in enhanced_pivot.index:
+                if category != 'TOTAL':
+                    monthly_usage = enhanced_pivot.loc[category, 'Monthly Usage']
+                    total_inventory = enhanced_pivot.loc[category, 'TOTAL']
+                    
+                    # Calculate projections by subtracting monthly usage
+                    for month in range(1, 7):
+                        projection = total_inventory - (monthly_usage * month)
+                        enhanced_pivot.loc[category, f'{month} Month Projection'] = projection
+        
+        # Ensure the TOTAL row has proper values for all columns
+        # Calculate row totals (sum across all status columns for each category)
+        for category in enhanced_pivot.index:
+            if category != 'TOTAL':
+                # Sum all status columns (excluding TOTAL, Monthly Usage, and projection columns)
+                status_columns = [col for col in enhanced_pivot.columns if col not in ['TOTAL', 'Monthly Usage'] and 'Month Projection' not in col]
+                row_total = enhanced_pivot.loc[category, status_columns].sum()
+                enhanced_pivot.loc[category, 'TOTAL'] = row_total
+        
+        # Calculate column totals (sum down all rows for each status)
+        for col in enhanced_pivot.columns:
+            if col != 'TOTAL':
+                # Sum all rows (excluding TOTAL row)
+                col_total = enhanced_pivot.loc[enhanced_pivot.index != 'TOTAL', col].sum()
+                enhanced_pivot.loc['TOTAL', col] = col_total
+        
+        logger.info(f"Created enhanced pivot table with {len(enhanced_pivot)} categories")
+        return enhanced_pivot
+    
     def save_pivot_table(self, pivot_df: pd.DataFrame, output_dir: str = None):
         """
         Save the pivot table to CSV and Excel files.
@@ -1084,6 +1414,166 @@ class CombinedProcessor:
                 worksheet.column_dimensions[column_letter].width = adjusted_width
         
         logger.info(f"Saved formatted pivot table to {excel_file}")
+    
+    def save_enhanced_pivot_table(self, enhanced_pivot_df: pd.DataFrame, output_dir: str = None):
+        """
+        Save the enhanced pivot table to CSV and Excel files with formatting.
+        
+        Args:
+            enhanced_pivot_df (pd.DataFrame): Enhanced pivot table to save
+            output_dir (str): Directory to save the pivot table. If None, uses self.output_dir
+        """
+        if enhanced_pivot_df.empty:
+            logger.warning("No enhanced pivot table to save")
+            return
+        
+        # Use instance output directory if none specified
+        if output_dir is None:
+            output_dir = self.output_dir
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Saving enhanced pivot table to: {output_dir}")
+        
+        # Save to CSV
+        csv_file = os.path.join(output_dir, "ENHANCED_PIVOT_TABLE.csv")
+        enhanced_pivot_df.to_csv(csv_file)
+        logger.info(f"Saved enhanced pivot table to {csv_file}")
+        
+        # Save to Excel with enhanced formatting
+        excel_file = os.path.join(output_dir, "ENHANCED_PIVOT_TABLE.xlsx")
+        with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+            enhanced_pivot_df.to_excel(writer, sheet_name='Enhanced Pivot Table')
+            
+            # Get the workbook and worksheet
+            workbook = writer.book
+            worksheet = writer.sheets['Enhanced Pivot Table']
+            
+            # Format the worksheet
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+            
+            # Define styles
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            total_font = Font(bold=True)
+            total_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+            usage_font = Font(bold=True, color="000000")
+            usage_fill = PatternFill(start_color="FFE699", end_color="FFE699", fill_type="solid")
+            projection_font = Font(bold=True, color="000000")
+            projection_fill = PatternFill(start_color="B8CCE4", end_color="B8CCE4", fill_type="solid")
+            negative_font = Font(bold=True, color="FF0000")
+            border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+            
+            # Format headers
+            for col in range(1, worksheet.max_column + 1):
+                cell = worksheet.cell(row=1, column=col)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.border = border
+                cell.alignment = Alignment(horizontal='center')
+            
+            # Format row headers (categories)
+            for row in range(2, worksheet.max_row + 1):
+                cell = worksheet.cell(row=row, column=1)
+                cell.font = Font(bold=True)
+                cell.border = border
+                
+                # Highlight total row
+                if cell.value == 'TOTAL':
+                    for col in range(1, worksheet.max_column + 1):
+                        total_cell = worksheet.cell(row=row, column=col)
+                        total_cell.font = total_font
+                        total_cell.fill = total_fill
+                        total_cell.border = border
+            
+            # Format all data cells
+            for row in range(2, worksheet.max_row + 1):
+                for col in range(2, worksheet.max_column + 1):
+                    cell = worksheet.cell(row=row, column=col)
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal='right')
+                    
+                    # Get column header to determine formatting
+                    col_header = worksheet.cell(row=1, column=col).value
+                    
+                    # Format Monthly Usage column
+                    if col_header == 'Monthly Usage':
+                        cell.fill = usage_fill
+                        cell.font = usage_font
+                        if cell.value == 0 or cell.value == 0.0:
+                            cell.value = '-'
+                            cell.font = Font(color="808080")
+                        else:
+                            cell.number_format = '#,##0.00'
+                    
+                    # Format projection columns
+                    elif 'Month Projection' in str(col_header):
+                        cell.fill = projection_fill
+                        cell.font = projection_font
+                        
+                        # Add Excel formula for projections
+                        if cell.value != 0 and cell.value != 0.0:
+                            # Get the row number for this category
+                            category_row = row
+                            # Get the column letter for TOTAL column
+                            total_col_letter = get_column_letter(worksheet.max_column - 7)  # TOTAL is 7 columns before the end
+                            # Get the column letter for Monthly Usage column
+                            usage_col_letter = get_column_letter(worksheet.max_column - 6)  # Monthly Usage is 6 columns before the end
+                            
+                            # Extract month number from column header
+                            month_num = int(str(col_header).split()[0])
+                            
+                            # Create formula: =TOTAL_COLUMN - (MONTHLY_USAGE * MONTH_NUMBER)
+                            formula = f"={total_col_letter}{category_row}-({usage_col_letter}{category_row}*{month_num})"
+                            cell.value = formula
+                            
+                            # Check if the calculated value would be negative and apply red formatting
+                            # We'll need to calculate this for formatting purposes
+                            try:
+                                total_value = enhanced_pivot_df.iloc[category_row-2, enhanced_pivot_df.columns.get_loc('TOTAL')]
+                                usage_value = enhanced_pivot_df.iloc[category_row-2, enhanced_pivot_df.columns.get_loc('Monthly Usage')]
+                                calculated_value = total_value - (usage_value * month_num)
+                                
+                                if calculated_value < 0:
+                                    cell.font = negative_font
+                                    cell.fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+                            except:
+                                pass
+                        
+                        if cell.value == 0 or cell.value == 0.0:
+                            cell.value = '-'
+                            cell.font = Font(color="808080")
+                        else:
+                            cell.number_format = '#,##0.00'
+                    
+                    # Format regular data cells
+                    else:
+                        if cell.value == 0 or cell.value == 0.0:
+                            cell.value = '-'
+                            cell.font = Font(color="808080")
+                        elif isinstance(cell.value, (int, float)) and cell.value > 0:
+                            cell.number_format = '#,##0'
+            
+            # Auto-adjust column widths
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+        
+        logger.info(f"Saved enhanced formatted pivot table to {excel_file}")
 
 
 def main():
@@ -1092,8 +1582,16 @@ def main():
     """
     import os
     
+    # Check if global usage file exists
+    global_usage_file = None
+    if os.path.exists('input/global_usage.csv'):
+        global_usage_file = 'input/global_usage.csv'
+        print("🌍 Global usage file found - will create enhanced pivot table with projections")
+    else:
+        print("📊 Running in standard mode (no global usage file)")
+    
     # Initialize the processor
-    processor = CombinedProcessor('input/deliveries.xlsx', 'input/inventory.xlsx')
+    processor = CombinedProcessor('input/deliveries.xlsx', 'input/inventory.xlsx', global_usage_file)
     
     # Process all data
     results = processor.process_all_data()
@@ -1140,14 +1638,35 @@ def main():
         
         if not pivot_table.empty:
             processor.save_pivot_table(pivot_table)
-            print(f"✅ Pivot table created successfully!")
+            print(f"✅ Standard pivot table created successfully!")
             print(f"Shape: {pivot_table.shape}")
             print(f"Categories: {len(pivot_table.index) - 1}")  # Exclude TOTAL row
             print(f"Statuses: {len(pivot_table.columns) - 1}")  # Exclude TOTAL column
-            print(f"\nPivot Table Preview:")
+            print(f"\nStandard Pivot Table Preview:")
             print(pivot_table.to_string())
         else:
-            print("❌ Failed to create pivot table")
+            print("❌ Failed to create standard pivot table")
+        
+        # Create enhanced pivot table if global usage file is available
+        if global_usage_file:
+            print(f"\n=== CREATING ENHANCED PIVOT TABLE ===")
+            
+            enhanced_pivot_table = processor.create_enhanced_pivot_table(combined_df)
+            
+            if not enhanced_pivot_table.empty:
+                processor.save_enhanced_pivot_table(enhanced_pivot_table)
+                print(f"✅ Enhanced pivot table created successfully!")
+                print(f"Shape: {enhanced_pivot_table.shape}")
+                print(f"Categories: {len(enhanced_pivot_table.index) - 1}")  # Exclude TOTAL row
+                print(f"Columns: {len(enhanced_pivot_table.columns)}")
+                print(f"\nEnhanced Pivot Table Summary:")
+                print(f"   Monthly Usage column: ✅")
+                print(f"   1-6 Month Projections: ✅")
+                print(f"   Negative values colored red: ✅")
+                print(f"\nEnhanced Pivot Table Preview:")
+                print(enhanced_pivot_table.to_string())
+            else:
+                print("❌ Failed to create enhanced pivot table")
     
     print(f"\n=== INDIVIDUAL DATA SAMPLES ===")
     for sheet_name, df in results.items():

@@ -27,10 +27,15 @@
     "UNSERVED CONTRACT": {
       "product_column": "PRODUCT",
       "quantity_column": "BL QTY(MT)"
+    },
+    "global_usage": {
+      "product_column": "Ingredient Name",
+      "quantity_column": "Ingredient Amount"
     }
   },
   "notes": {
     "summary_table": "SUMMARY table is ignored as per user request",
+    "global_usage": "Global usage data is processed separately and integrated into the enhanced pivot table",
     "description": "This mapping defines the product and quantity columns for each table in the Excel processor"
   }
 } 
