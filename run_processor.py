@@ -10,6 +10,7 @@ from combined_processor import CombinedProcessor
 import os
 import sys
 from datetime import datetime
+import pandas as pd # Added for enhanced pivot table
 
 # =============================================================================
 # CONFIGURATION - CHANGE THIS DATE TO PROCESS DIFFERENT FOLDERS
@@ -41,6 +42,7 @@ def run_processor(date_str):
     # Check if required files exist
     delivery_file = os.path.join(input_dir, "deliveries.xlsx")
     inventory_file = os.path.join(input_dir, "inventory.xlsx")
+    global_usage_file = os.path.join(input_dir, "global_usage.csv")
     
     if not os.path.exists(delivery_file):
         print(f"❌ Delivery file not found: {delivery_file}")
@@ -50,15 +52,26 @@ def run_processor(date_str):
         print(f"❌ Inventory file not found: {inventory_file}")
         return False
     
+    # Check if global usage file exists
+    if os.path.exists(global_usage_file):
+        print(f"🌍 Global usage file found: {global_usage_file}")
+        print("   Will create enhanced pivot table with GLOBAL USAGE column")
+    else:
+        print(f"📊 No global usage file found: {global_usage_file}")
+        print("   Running in standard mode")
+        global_usage_file = None
+    
     print("✅ Input files found:")
     print(f"  📊 Deliveries: {delivery_file}")
     print(f"  📦 Inventory: {inventory_file}")
+    if global_usage_file:
+        print(f"  🌍 Global Usage: {global_usage_file}")
     print()
     
     try:
         # Initialize the processor
         print("🔄 Initializing processor...")
-        processor = CombinedProcessor(delivery_file, inventory_file)
+        processor = CombinedProcessor(delivery_file, inventory_file, global_usage_file)
         
         # Show detected date and output directory
         print(f"📅 Detected date: {processor.input_date}")
@@ -68,6 +81,11 @@ def run_processor(date_str):
         # Process all data
         print("🔄 Processing Excel data...")
         results = processor.process_all_data()
+        
+        # Ensure global usage data is loaded if available
+        if global_usage_file:
+            processor._load_global_usage_data()
+            print(f"🌍 Global usage data loaded: {len(processor.global_usage_data.get('global_usage', pd.DataFrame()))} ingredients")
         
         # Print summary
         summary = processor.get_summary()
@@ -113,7 +131,27 @@ def run_processor(date_str):
                 print(f"✅ Pivot table created successfully!")
                 print(f"📐 Shape: {pivot_table.shape}")
                 print(f"📁 Categories: {len(pivot_table.index) - 1}")  # Exclude TOTAL row
-                print(f"📊 Statuses: {len(pivot_table.columns) - 1}")  # Exclude TOTAL column
+                # Count statuses excluding TOTAL and GLOBAL USAGE columns
+                status_columns = [col for col in pivot_table.columns if col not in ['TOTAL', 'GLOBAL USAGE']]
+                print(f"📊 Statuses: {len(status_columns)}")
+                print(f"📋 Column order: {list(pivot_table.columns)}")
+                
+                # Show enhanced pivot table if global usage is available
+                if global_usage_file:
+                    print(f"\n🌍 Creating enhanced pivot table with GLOBAL USAGE...")
+                    enhanced_pivot_table = processor.create_enhanced_pivot_table(combined_df)
+                    
+                    if not enhanced_pivot_table.empty:
+                        processor.save_enhanced_pivot_table(enhanced_pivot_table)
+                        print(f"✅ Enhanced pivot table created successfully!")
+                        print(f"📐 Shape: {enhanced_pivot_table.shape}")
+                        print(f"📁 Categories: {len(enhanced_pivot_table.index) - 1}")  # Exclude TOTAL row
+                        print(f"📋 Column order: {list(enhanced_pivot_table.columns)}")
+                        print(f"🌍 GLOBAL USAGE column (right of TOTAL): ✅")
+                        print(f"📊 Monthly Usage column: ✅")
+                        print(f"🔮 1-6 Month Projections: ✅")
+                    else:
+                        print("❌ Failed to create enhanced pivot table")
             else:
                 print("❌ Failed to create pivot table")
         

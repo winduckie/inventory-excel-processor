@@ -828,7 +828,7 @@ class CombinedProcessor:
     
     def combine_all_data(self) -> pd.DataFrame:
         """
-        Combine all tables (except SUMMARY) including inventory data.
+        Combine all tables (except SUMMARY) including inventory data and global usage data.
         
         Returns:
             pd.DataFrame: Combined dataframe with all data
@@ -965,6 +965,46 @@ class CombinedProcessor:
                 combined_data.append(inventory_data)
                 logger.info(f"Added {len(inventory_data)} rows from INVENTORY")
         
+        # Process global usage data if available
+        if self.global_usage_file and 'global_usage' in self.global_usage_data:
+            global_df = self.global_usage_data['global_usage']
+            if not global_df.empty:
+                # Create global usage data with negative quantities (representing usage)
+                global_usage_data = []
+                
+                for _, row in global_df.iterrows():
+                    ingredient_name = row.get('Ingredient Name', '')
+                    ingredient_amount = row.get('Ingredient Amount', 0)
+                    
+                    if pd.notna(ingredient_name) and ingredient_name != '' and pd.notna(ingredient_amount):
+                        # Convert monthly usage from kg to tons and make it negative (representing usage)
+                        monthly_usage_kg = ingredient_amount / 12.0  # Convert annual to monthly
+                        monthly_usage_tons = -(monthly_usage_kg / 1000.0)  # Convert to tons and make negative
+                        
+                        # Find category for this ingredient
+                        category = ''
+                        if ingredient_name in categories:
+                            category = categories[ingredient_name]
+                        else:
+                            # If no category found, use ingredient name as category
+                            category = ingredient_name
+                            # Add to product categories for manual editing later
+                            if ingredient_name not in categories:
+                                new_products.add(ingredient_name)
+                                categories[ingredient_name] = ''
+                        
+                        global_usage_data.append({
+                            'PRODUCT': ingredient_name,
+                            'QUANTITY': monthly_usage_tons,
+                            'STATUS': 'GLOBAL USAGE',
+                            'CATEGORY': category
+                        })
+                
+                if global_usage_data:
+                    global_df_combined = pd.DataFrame(global_usage_data)
+                    combined_data.append(global_df_combined)
+                    logger.info(f"Added {len(global_usage_data)} rows from GLOBAL USAGE")
+        
         if combined_data:
             # Combine all dataframes
             final_df = pd.concat(combined_data, ignore_index=True)
@@ -1006,6 +1046,12 @@ class CombinedProcessor:
                 if na_count > 0:
                     na_products = final_df[final_df['CATEGORY'] == 'N/A']['PRODUCT'].unique()
                     logger.info(f"N/A category products ({na_count}): {', '.join(sorted(na_products))}")
+                
+                # Log status breakdown including global usage
+                status_counts = final_df['STATUS'].value_counts()
+                logger.info("Status breakdown in combined data:")
+                for status, count in status_counts.items():
+                    logger.info(f"  {status}: {count} products")
             
             return final_df
         else:
@@ -1095,6 +1141,7 @@ class CombinedProcessor:
     def create_pivot_table(self, combined_df: pd.DataFrame = None) -> pd.DataFrame:
         """
         Create a pivot table with Category in rows, Status in columns, and sum of quantities as values.
+        Global Usage is positioned to the right of the TOTAL column and is not included in total calculations.
         
         Args:
             combined_df (pd.DataFrame, optional): Combined dataframe. If None, will use self.combine_all_data()
@@ -1144,15 +1191,29 @@ class CombinedProcessor:
                 fill_value=0
             )
             
-            # Add empty TOTAL column (will be filled with formulas in Excel)
-            pivot_table['TOTAL'] = 0
+            # Reorder columns to put GLOBAL USAGE after TOTAL
+            if 'GLOBAL USAGE' in pivot_table.columns:
+                # Get all columns except GLOBAL USAGE
+                other_columns = [col for col in pivot_table.columns if col != 'GLOBAL USAGE']
+                
+                # Add TOTAL column (will be filled with formulas in Excel)
+                pivot_table['TOTAL'] = 0
+                
+                # Reorder columns: other statuses first, then TOTAL, then GLOBAL USAGE
+                final_columns = other_columns + ['TOTAL', 'GLOBAL USAGE']
+                pivot_table = pivot_table[final_columns]
+                
+                logger.info("Positioned GLOBAL USAGE column to the right of TOTAL column")
+            else:
+                # Add empty TOTAL column (will be filled with formulas in Excel)
+                pivot_table['TOTAL'] = 0
             
             # Add empty TOTAL row (will be filled with formulas in Excel)
             pivot_table.loc['TOTAL'] = 0
             
             logger.info(f"Created pivot table with shape: {pivot_table.shape}")
             logger.info(f"Categories: {list(pivot_table.index[:-1])}")  # Exclude 'TOTAL' row
-            logger.info(f"Statuses: {list(pivot_table.columns[:-1])}")  # Exclude 'TOTAL' column
+            logger.info(f"Statuses: {list(pivot_table.columns[:-2])}")  # Exclude 'TOTAL' and 'GLOBAL USAGE' columns
             
             return pivot_table
             
@@ -1163,6 +1224,7 @@ class CombinedProcessor:
     def create_enhanced_pivot_table(self, combined_df: pd.DataFrame = None) -> pd.DataFrame:
         """
         Create an enhanced pivot table with monthly usage and projected inventory.
+        Global Usage is positioned to the right of the TOTAL column and is not included in total calculations.
         
         Args:
             combined_df (pd.DataFrame, optional): Combined dataframe. If None, will use self.combine_all_data()
@@ -1187,7 +1249,7 @@ class CombinedProcessor:
         # Create enhanced pivot table
         enhanced_pivot = base_pivot.copy()
         
-        # Add Monthly Usage column
+        # Add Monthly Usage column after GLOBAL USAGE
         enhanced_pivot['Monthly Usage'] = 0.0
         
         # Add projection columns
@@ -1246,11 +1308,13 @@ class CombinedProcessor:
                         enhanced_pivot.loc[category, f'{month} Month Projection'] = projection
         
         # Ensure the TOTAL row has proper values for all columns
-        # Calculate row totals (sum across all status columns for each category)
+        # Calculate row totals (sum across all status columns for each category, excluding GLOBAL USAGE)
         for category in enhanced_pivot.index:
             if category != 'TOTAL':
-                # Sum all status columns (excluding TOTAL, Monthly Usage, and projection columns)
-                status_columns = [col for col in enhanced_pivot.columns if col not in ['TOTAL', 'Monthly Usage'] and 'Month Projection' not in col]
+                # Sum all status columns (excluding TOTAL, GLOBAL USAGE, Monthly Usage, and projection columns)
+                status_columns = [col for col in enhanced_pivot.columns 
+                                if col not in ['TOTAL', 'GLOBAL USAGE', 'Monthly Usage'] 
+                                and 'Month Projection' not in col]
                 row_total = enhanced_pivot.loc[category, status_columns].sum()
                 enhanced_pivot.loc[category, 'TOTAL'] = row_total
         
@@ -1262,6 +1326,7 @@ class CombinedProcessor:
                 enhanced_pivot.loc['TOTAL', col] = col_total
         
         logger.info(f"Created enhanced pivot table with {len(enhanced_pivot)} categories")
+        logger.info(f"Column order: {list(enhanced_pivot.columns)}")
         return enhanced_pivot
     
     def save_pivot_table(self, pivot_df: pd.DataFrame, output_dir: str = None):
@@ -1354,14 +1419,16 @@ class CombinedProcessor:
             # Add SUM formulas for totals
             # Row totals (sum across columns for each category)
             for row in range(2, worksheet.max_row):  # Exclude the TOTAL row
-                # Calculate the range for this row (from column B to the second-to-last column)
+                # Calculate the range for this row (from column B to the column before TOTAL)
                 start_col = get_column_letter(2)  # Column B
-                end_col = get_column_letter(worksheet.max_column - 1)  # Second-to-last column
+                # Find the TOTAL column (it should be the second-to-last column)
+                total_col = worksheet.max_column - 1
+                end_col = get_column_letter(total_col - 1)  # Column before TOTAL
                 row_num = row
                 
-                # Create SUM formula for row total
+                # Create SUM formula for row total (excluding GLOBAL USAGE)
                 sum_formula = f"=SUM({start_col}{row_num}:{end_col}{row_num})"
-                total_cell = worksheet.cell(row=row, column=worksheet.max_column)
+                total_cell = worksheet.cell(row=row, column=total_col)
                 total_cell.value = sum_formula
                 total_cell.number_format = '#,##0'
                 total_cell.font = Font(bold=True)
@@ -1369,7 +1436,7 @@ class CombinedProcessor:
                 total_cell.alignment = Alignment(horizontal='right')
             
             # Column totals (sum down rows for each status)
-            for col in range(2, worksheet.max_column):  # Exclude the TOTAL column
+            for col in range(2, total_col):  # Exclude the TOTAL column and GLOBAL USAGE column
                 # Calculate the range for this column (from row 2 to the second-to-last row)
                 col_letter = get_column_letter(col)
                 start_row = 2
@@ -1385,14 +1452,14 @@ class CombinedProcessor:
                 total_cell.border = border
                 total_cell.alignment = Alignment(horizontal='right')
             
-            # Grand total (sum of all data cells)
+            # Grand total (sum of all data cells excluding GLOBAL USAGE)
             start_col = get_column_letter(2)  # Column B
-            end_col = get_column_letter(worksheet.max_column - 1)  # Second-to-last column
+            end_col = get_column_letter(total_col - 1)  # Column before TOTAL
             start_row = 2
             end_row = worksheet.max_row - 1  # Second-to-last row
             
             grand_total_formula = f"=SUM({start_col}{start_row}:{end_col}{end_row})"
-            grand_total_cell = worksheet.cell(row=worksheet.max_row, column=worksheet.max_column)
+            grand_total_cell = worksheet.cell(row=worksheet.max_row, column=total_col)
             grand_total_cell.value = grand_total_formula
             grand_total_cell.number_format = '#,##0'
             grand_total_cell.font = total_font
@@ -1521,30 +1588,45 @@ class CombinedProcessor:
                         if cell.value != 0 and cell.value != 0.0:
                             # Get the row number for this category
                             category_row = row
-                            # Get the column letter for TOTAL column
-                            total_col_letter = get_column_letter(worksheet.max_column - 7)  # TOTAL is 7 columns before the end
-                            # Get the column letter for Monthly Usage column
-                            usage_col_letter = get_column_letter(worksheet.max_column - 6)  # Monthly Usage is 6 columns before the end
                             
-                            # Extract month number from column header
-                            month_num = int(str(col_header).split()[0])
+                            # Find the TOTAL column position (it should be the second-to-last column before GLOBAL USAGE)
+                            # Column order: [status columns] -> TOTAL -> GLOBAL USAGE -> Monthly Usage -> [projection columns]
+                            total_col_idx = None
+                            for col_idx in range(1, worksheet.max_column + 1):
+                                if worksheet.cell(row=1, column=col_idx).value == 'TOTAL':
+                                    total_col_idx = col_idx
+                                    break
                             
-                            # Create formula: =TOTAL_COLUMN - (MONTHLY_USAGE * MONTH_NUMBER)
-                            formula = f"={total_col_letter}{category_row}-({usage_col_letter}{category_row}*{month_num})"
-                            cell.value = formula
+                            # Find the Monthly Usage column position
+                            usage_col_idx = None
+                            for col_idx in range(1, worksheet.max_column + 1):
+                                if worksheet.cell(row=1, column=col_idx).value == 'Monthly Usage':
+                                    usage_col_idx = col_idx
+                                    break
                             
-                            # Check if the calculated value would be negative and apply red formatting
-                            # We'll need to calculate this for formatting purposes
-                            try:
-                                total_value = enhanced_pivot_df.iloc[category_row-2, enhanced_pivot_df.columns.get_loc('TOTAL')]
-                                usage_value = enhanced_pivot_df.iloc[category_row-2, enhanced_pivot_df.columns.get_loc('Monthly Usage')]
-                                calculated_value = total_value - (usage_value * month_num)
+                            if total_col_idx and usage_col_idx:
+                                total_col_letter = get_column_letter(total_col_idx)
+                                usage_col_letter = get_column_letter(usage_col_idx)
                                 
-                                if calculated_value < 0:
-                                    cell.font = negative_font
-                                    cell.fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
-                            except:
-                                pass
+                                # Extract month number from column header
+                                month_num = int(str(col_header).split()[0])
+                                
+                                # Create formula: =TOTAL_COLUMN - (MONTHLY_USAGE * MONTH_NUMBER)
+                                formula = f"={total_col_letter}{category_row}-({usage_col_letter}{category_row}*{month_num})"
+                                cell.value = formula
+                                
+                                # Check if the calculated value would be negative and apply red formatting
+                                # We'll need to calculate this for formatting purposes
+                                try:
+                                    total_value = enhanced_pivot_df.iloc[category_row-2, enhanced_pivot_df.columns.get_loc('TOTAL')]
+                                    usage_value = enhanced_pivot_df.iloc[category_row-2, enhanced_pivot_df.columns.get_loc('Monthly Usage')]
+                                    calculated_value = total_value - (usage_value * month_num)
+                                    
+                                    if calculated_value < 0:
+                                        cell.font = negative_font
+                                        cell.fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+                                except:
+                                    pass
                         
                         if cell.value == 0 or cell.value == 0.0:
                             cell.value = '-'
@@ -1596,6 +1678,11 @@ def main():
     # Process all data
     results = processor.process_all_data()
     
+    # Ensure global usage data is loaded if available
+    if global_usage_file:
+        processor._load_global_usage_data()
+        print(f"🌍 Global usage data loaded: {len(processor.global_usage_data.get('global_usage', pd.DataFrame()))} ingredients")
+    
     # Print summary
     summary = processor.get_summary()
     print("\n=== COMBINED PROCESSING SUMMARY ===")
@@ -1641,7 +1728,10 @@ def main():
             print(f"✅ Standard pivot table created successfully!")
             print(f"Shape: {pivot_table.shape}")
             print(f"Categories: {len(pivot_table.index) - 1}")  # Exclude TOTAL row
-            print(f"Statuses: {len(pivot_table.columns) - 1}")  # Exclude TOTAL column
+            # Count statuses excluding TOTAL and GLOBAL USAGE columns
+            status_columns = [col for col in pivot_table.columns if col not in ['TOTAL', 'GLOBAL USAGE']]
+            print(f"Statuses: {len(status_columns)}")
+            print(f"Column order: {list(pivot_table.columns)}")
             print(f"\nStandard Pivot Table Preview:")
             print(pivot_table.to_string())
         else:
@@ -1659,7 +1749,9 @@ def main():
                 print(f"Shape: {enhanced_pivot_table.shape}")
                 print(f"Categories: {len(enhanced_pivot_table.index) - 1}")  # Exclude TOTAL row
                 print(f"Columns: {len(enhanced_pivot_table.columns)}")
+                print(f"Column order: {list(enhanced_pivot_table.columns)}")
                 print(f"\nEnhanced Pivot Table Summary:")
+                print(f"   GLOBAL USAGE column (right of TOTAL): ✅")
                 print(f"   Monthly Usage column: ✅")
                 print(f"   1-6 Month Projections: ✅")
                 print(f"   Negative values colored red: ✅")
