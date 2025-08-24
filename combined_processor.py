@@ -977,9 +977,8 @@ class CombinedProcessor:
                     ingredient_amount = row.get('Ingredient Amount', 0)
                     
                     if pd.notna(ingredient_name) and ingredient_name != '' and pd.notna(ingredient_amount):
-                        # Convert monthly usage from kg to tons and make it negative (representing usage)
-                        monthly_usage_kg = ingredient_amount / 12.0  # Convert annual to monthly
-                        monthly_usage_tons = -(monthly_usage_kg / 1000.0)  # Convert to tons and make negative
+                        # Convert monthly usage from kg to tons (values are already monthly)
+                        monthly_usage_tons = ingredient_amount / 1000.0  # Convert kg to tons
                         
                         # Find category for this ingredient
                         category = ''
@@ -1191,29 +1190,15 @@ class CombinedProcessor:
                 fill_value=0
             )
             
-            # Reorder columns to put GLOBAL USAGE after TOTAL
-            if 'GLOBAL USAGE' in pivot_table.columns:
-                # Get all columns except GLOBAL USAGE
-                other_columns = [col for col in pivot_table.columns if col != 'GLOBAL USAGE']
-                
-                # Add TOTAL column (will be filled with formulas in Excel)
-                pivot_table['TOTAL'] = 0
-                
-                # Reorder columns: other statuses first, then TOTAL, then GLOBAL USAGE
-                final_columns = other_columns + ['TOTAL', 'GLOBAL USAGE']
-                pivot_table = pivot_table[final_columns]
-                
-                logger.info("Positioned GLOBAL USAGE column to the right of TOTAL column")
-            else:
-                # Add empty TOTAL column (will be filled with formulas in Excel)
-                pivot_table['TOTAL'] = 0
+            # Add empty TOTAL column (will be filled with formulas in Excel)
+            pivot_table['TOTAL'] = 0
             
             # Add empty TOTAL row (will be filled with formulas in Excel)
             pivot_table.loc['TOTAL'] = 0
             
             logger.info(f"Created pivot table with shape: {pivot_table.shape}")
             logger.info(f"Categories: {list(pivot_table.index[:-1])}")  # Exclude 'TOTAL' row
-            logger.info(f"Statuses: {list(pivot_table.columns[:-2])}")  # Exclude 'TOTAL' and 'GLOBAL USAGE' columns
+            logger.info(f"Statuses: {list(pivot_table.columns[:-1])}")  # Exclude 'TOTAL' column
             
             return pivot_table
             
@@ -1249,7 +1234,7 @@ class CombinedProcessor:
         # Create enhanced pivot table
         enhanced_pivot = base_pivot.copy()
         
-        # Add Monthly Usage column after GLOBAL USAGE
+        # Add Monthly Usage column
         enhanced_pivot['Monthly Usage'] = 0.0
         
         # Add projection columns
@@ -1258,54 +1243,50 @@ class CombinedProcessor:
         
         # Process global usage data if available
         if self.global_usage_file and 'global_usage' in self.global_usage_data:
-            # Create category-based usage mapping
-            category_usage = {}
+            # Get monthly usage from the combined data (GLOBAL USAGE status)
+            global_usage_df = combined_df[combined_df['STATUS'] == 'GLOBAL USAGE']
             
-            # Load product categories to map ingredients to categories
-            product_categories = self._load_product_categories()
-            
-            # Process each ingredient
-            for ingredient_name in self.global_usage_data['global_usage']['Ingredient Name'].unique():
-                # Calculate monthly usage for this ingredient
-                monthly_usage = self._calculate_monthly_usage(ingredient_name)
+            if not global_usage_df.empty:
+                # Create category-based usage mapping
+                category_usage = {}
                 
-                # Find what category this ingredient belongs to
-                category = None
-                if ingredient_name in product_categories:
-                    category = product_categories[ingredient_name]
-                else:
-                    # If no category found, use ingredient name as category (will be added to product_categories.csv)
-                    category = ingredient_name
-                    # Add to product categories for manual editing later
-                    self._add_new_ingredients_to_categories([ingredient_name])
-                
-                # Sum usage by category
-                if category in category_usage:
-                    category_usage[category] += monthly_usage
-                else:
-                    category_usage[category] = monthly_usage
-            
-            # Add monthly usage to existing categories or create new category rows
-            for category, total_usage in category_usage.items():
-                if category in enhanced_pivot.index:
-                    # Category exists, add monthly usage
-                    enhanced_pivot.loc[category, 'Monthly Usage'] = total_usage
-                else:
-                    # Category doesn't exist, create new row
-                    new_row = pd.Series(0.0, index=enhanced_pivot.columns)
-                    new_row['Monthly Usage'] = total_usage
-                    enhanced_pivot.loc[category] = new_row
-            
-            # Calculate projections for all categories
-            for category in enhanced_pivot.index:
-                if category != 'TOTAL':
-                    monthly_usage = enhanced_pivot.loc[category, 'Monthly Usage']
-                    total_inventory = enhanced_pivot.loc[category, 'TOTAL']
+                for _, row in global_usage_df.iterrows():
+                    ingredient_name = row['PRODUCT']
+                    monthly_usage = row['QUANTITY']
+                    category = row['CATEGORY']
                     
-                    # Calculate projections by subtracting monthly usage
-                    for month in range(1, 7):
+                    # Sum usage by category
+                    if category in category_usage:
+                        category_usage[category] += monthly_usage
+                    else:
+                        category_usage[category] = monthly_usage
+                
+                # Add monthly usage to existing categories or create new category rows
+                for category, total_usage in category_usage.items():
+                    if category in enhanced_pivot.index:
+                        # Category exists, add monthly usage
+                        enhanced_pivot.loc[category, 'Monthly Usage'] = total_usage
+                    else:
+                        # Category doesn't exist, create new row
+                        new_row = pd.Series(0.0, index=enhanced_pivot.columns)
+                        new_row['Monthly Usage'] = total_usage
+                        enhanced_pivot.loc[category] = new_row
+        
+        # Calculate projections for all categories
+        for category in enhanced_pivot.index:
+            if category != 'TOTAL':
+                monthly_usage = enhanced_pivot.loc[category, 'Monthly Usage']
+                total_inventory = enhanced_pivot.loc[category, 'TOTAL']
+                
+                # Calculate projections by subtracting monthly usage
+                for month in range(1, 7):
+                    if total_inventory == "-" or pd.isna(monthly_usage):
+                        # If no monthly usage, projection equals total inventory
+                        projection = - (monthly_usage * month)
+                    else:
+                        # Calculate projection by subtracting monthly usage
                         projection = total_inventory - (monthly_usage * month)
-                        enhanced_pivot.loc[category, f'{month} Month Projection'] = projection
+                    enhanced_pivot.loc[category, f'{month} Month Projection'] = projection
         
         # Ensure the TOTAL row has proper values for all columns
         # Calculate row totals (sum across all status columns for each category, excluding GLOBAL USAGE)
@@ -1408,13 +1389,31 @@ class CombinedProcessor:
                     cell.border = border
                     cell.alignment = Alignment(horizontal='right')
                     
-                    # Replace zero values with dash for display
-                    if cell.value == 0 or cell.value == 0.0:
-                        cell.value = '-'
-                        cell.font = Font(color="808080")  # Gray color for dashes
-                    elif isinstance(cell.value, (int, float)) and cell.value > 0:
-                        # Format all numbers with comma separation and 0 decimal places
-                        cell.number_format = '#,##0'
+                    # Get column header to determine formatting
+                    col_header = worksheet.cell(row=1, column=col).value
+                    
+                    # Format GLOBAL USAGE column
+                    if col_header == 'GLOBAL USAGE':
+                        # Keep actual values as 0 but display as dash
+                        if cell.value == 0 or cell.value == 0.0:
+                            cell.value = '-'
+                            cell.font = Font(color="808080")
+                        else:
+                            # Format negative values (usage) with proper number format
+                            cell.number_format = '#,##0.00'
+                            # Apply red color for negative values
+                            if cell.value < 0:
+                                cell.font = Font(color="FF0000", bold=True)
+                    
+                    # Format other columns
+                    else:
+                        # Replace zero values with dash for display
+                        if cell.value == 0 or cell.value == 0.0:
+                            cell.value = '-'
+                            cell.font = Font(color="808080")  # Gray color for dashes
+                        elif isinstance(cell.value, (int, float)) and cell.value > 0:
+                            # Format all numbers with comma separation and 0 decimal places
+                            cell.number_format = '#,##0'
             
             # Add SUM formulas for totals
             # Row totals (sum across columns for each category)
@@ -1589,8 +1588,7 @@ class CombinedProcessor:
                             # Get the row number for this category
                             category_row = row
                             
-                            # Find the TOTAL column position (it should be the second-to-last column before GLOBAL USAGE)
-                            # Column order: [status columns] -> TOTAL -> GLOBAL USAGE -> Monthly Usage -> [projection columns]
+                            # Find the TOTAL column position
                             total_col_idx = None
                             for col_idx in range(1, worksheet.max_column + 1):
                                 if worksheet.cell(row=1, column=col_idx).value == 'TOTAL':
@@ -1611,8 +1609,9 @@ class CombinedProcessor:
                                 # Extract month number from column header
                                 month_num = int(str(col_header).split()[0])
                                 
-                                # Create formula: =TOTAL_COLUMN - (MONTHLY_USAGE * MONTH_NUMBER)
-                                formula = f"={total_col_letter}{category_row}-({usage_col_letter}{category_row}*{month_num})"
+                                # Create formula with IF statement to handle special cases:
+                                # =IF(total_col="-",-(usage_col*month),IF(usage_col="-",total_col,total_col-(usage_col*month)))
+                                formula = f'=IF({total_col_letter}{category_row}="-",-({usage_col_letter}{category_row}*{month_num}),IF({usage_col_letter}{category_row}="-",{total_col_letter}{category_row},{total_col_letter}{category_row}-({usage_col_letter}{category_row}*{month_num})))'
                                 cell.value = formula
                                 
                                 # Check if the calculated value would be negative and apply red formatting
@@ -1620,7 +1619,10 @@ class CombinedProcessor:
                                 try:
                                     total_value = enhanced_pivot_df.iloc[category_row-2, enhanced_pivot_df.columns.get_loc('TOTAL')]
                                     usage_value = enhanced_pivot_df.iloc[category_row-2, enhanced_pivot_df.columns.get_loc('Monthly Usage')]
-                                    calculated_value = total_value - (usage_value * month_num)
+                                    if usage_value == 0 or pd.isna(usage_value):
+                                        calculated_value = total_value
+                                    else:
+                                        calculated_value = total_value - (usage_value * month_num)
                                     
                                     if calculated_value < 0:
                                         cell.font = negative_font
@@ -1633,6 +1635,19 @@ class CombinedProcessor:
                             cell.font = Font(color="808080")
                         else:
                             cell.number_format = '#,##0.00'
+                    
+                    # Format GLOBAL USAGE column
+                    elif col_header == 'GLOBAL USAGE':
+                        # Keep actual values as 0 but display as dash
+                        if cell.value == 0 or cell.value == 0.0:
+                            cell.value = '-'
+                            cell.font = Font(color="808080")
+                        else:
+                            # Format negative values (usage) with proper number format
+                            cell.number_format = '#,##0.00'
+                            # Apply red color for negative values
+                            if cell.value < 0:
+                                cell.font = Font(color="FF0000", bold=True)
                     
                     # Format regular data cells
                     else:
