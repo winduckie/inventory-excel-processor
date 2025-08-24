@@ -1583,17 +1583,74 @@ class CombinedProcessor:
                         cell.fill = projection_fill
                         cell.font = projection_font
                         
+                        # Find the TOTAL column position first (needed for highlighting and formulas)
+                        total_col_idx = None
+                        for col_idx in range(1, worksheet.max_column + 1):
+                            if worksheet.cell(row=1, column=col_idx).value == 'TOTAL':
+                                total_col_idx = col_idx
+                                break
+                        
+                        # Check if the TOTAL cell for this row is 0 or "-" to apply yellow highlighting
+                        if total_col_idx:
+                            # Get the actual data value from the enhanced pivot table using row index
+                            try:
+                                # The row index in the Excel file corresponds to the data row (subtract 1 for header, subtract 1 more for 0-based index)
+                                data_row_idx = row - 2  # Excel row 2 = data index 0
+                                if data_row_idx >= 0 and data_row_idx < len(enhanced_pivot_df):
+                                    # Get the actual TOTAL value from the data
+                                    total_value = enhanced_pivot_df.iloc[data_row_idx]['TOTAL']
+                                    logger.debug(f"Row {row}, data_row_idx {data_row_idx}, total_value: {total_value}")
+                                    if total_value == 0 or total_value == 0.0 or pd.isna(total_value):
+                                        # Only apply yellow highlighting if this month's projection will be negative
+                                        # Get the monthly usage value
+                                        usage_value = enhanced_pivot_df.iloc[data_row_idx]['Monthly Usage']
+                                        if usage_value > 0:
+                                            # Calculate if this month's projection will be negative
+                                            month_num = int(str(col_header).split()[0])
+                                            projected_value = -(usage_value * month_num)  # Negative because no inventory
+                                            if projected_value < 0:
+                                                # Apply yellow highlighting for zero inventory with negative projections
+                                                yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+                                                cell.fill = yellow_fill
+                                                logger.info(f"Applied yellow highlighting to row {row} month {month_num} (projected_value: {projected_value}) - no inventory from start, will show deficit")
+                                        # If usage_value is 0, don't apply yellow highlighting (no deficit to show)
+                                    else:
+                                        # Check if this projection will be negative (will run out of existing inventory)
+                                        # Get the monthly usage value
+                                        usage_value = enhanced_pivot_df.iloc[data_row_idx]['Monthly Usage']
+                                        if usage_value > 0:
+                                            # Calculate if this month's projection will be negative
+                                            month_num = int(str(col_header).split()[0])
+                                            projected_value = total_value - (usage_value * month_num)
+                                            if projected_value < 0:
+                                                # Apply red highlighting for negative projections (will run out)
+                                                red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+                                                cell.fill = red_fill
+                                                logger.info(f"Applied red highlighting to row {row} month {month_num} (projected_value: {projected_value}) - will run out")
+                            except Exception as e:
+                                logger.warning(f"Error checking total value for row {row}: {e}")
+                                # Fallback to checking the cell value if we can't get the data
+                                total_cell_value = worksheet.cell(row=row, column=total_col_idx).value
+                                if total_cell_value == 0 or total_cell_value == 0.0 or total_cell_value == "-":
+                                    # Only apply yellow highlighting if this month's projection will be negative
+                                    # Extract month number from column header
+                                    try:
+                                        month_num = int(str(col_header).split()[0])
+                                        # For fallback, we'll apply yellow highlighting since we can't determine usage
+                                        # This ensures we don't miss highlighting important deficit scenarios
+                                        yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+                                        cell.fill = yellow_fill
+                                        logger.info(f"Applied yellow highlighting to row {row} month {month_num} via fallback (cell_value: {total_cell_value})")
+                                    except:
+                                        # If we can't determine month, apply yellow highlighting
+                                        yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+                                        cell.fill = yellow_fill
+                                        logger.info(f"Applied yellow highlighting to row {row} via fallback (cell_value: {total_cell_value})")
+                        
                         # Add Excel formula for projections
                         if cell.value != 0 and cell.value != 0.0:
                             # Get the row number for this category
                             category_row = row
-                            
-                            # Find the TOTAL column position
-                            total_col_idx = None
-                            for col_idx in range(1, worksheet.max_column + 1):
-                                if worksheet.cell(row=1, column=col_idx).value == 'TOTAL':
-                                    total_col_idx = col_idx
-                                    break
                             
                             # Find the Monthly Usage column position
                             usage_col_idx = None
@@ -1614,21 +1671,7 @@ class CombinedProcessor:
                                 formula = f'=IF({total_col_letter}{category_row}="-",-({usage_col_letter}{category_row}*{month_num}),IF({usage_col_letter}{category_row}="-",{total_col_letter}{category_row},{total_col_letter}{category_row}-({usage_col_letter}{category_row}*{month_num})))'
                                 cell.value = formula
                                 
-                                # Check if the calculated value would be negative and apply red formatting
-                                # We'll need to calculate this for formatting purposes
-                                try:
-                                    total_value = enhanced_pivot_df.iloc[category_row-2, enhanced_pivot_df.columns.get_loc('TOTAL')]
-                                    usage_value = enhanced_pivot_df.iloc[category_row-2, enhanced_pivot_df.columns.get_loc('Monthly Usage')]
-                                    if usage_value == 0 or pd.isna(usage_value):
-                                        calculated_value = total_value
-                                    else:
-                                        calculated_value = total_value - (usage_value * month_num)
-                                    
-                                    if calculated_value < 0:
-                                        cell.font = negative_font
-                                        cell.fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
-                                except:
-                                    pass
+
                         
                         if cell.value == 0 or cell.value == 0.0:
                             cell.value = '-'
