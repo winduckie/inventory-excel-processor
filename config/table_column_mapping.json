@@ -2,19 +2,19 @@
   "table_column_mapping": {
     "LANDED": {
       "product_column": "PRODUCT",
-      "quantity_column": "INVOICE QTY(MT)"
+      "quantity_column": "QTY (MT) /BL"
     },
     "PULLOUT": {
       "product_column": "PRODUCT", 
-      "quantity_column": "INVOICE QTY(MT)"
+      "quantity_column": "QTY (MT) /BL"
     },
     "SAILING": {
       "product_column": "PRODUCT",
-      "quantity_column": "BL QTY(MT)"
+      "quantity_column": "QTY (MT) /BL"
     },
     "UNSERVED_IMPORTED": {
       "product_column": "PRODUCT",
-      "quantity_column": "BL QTY(MT)"
+      "quantity_column": "TOTAL"
     },
     "UNSERVED_LOCAL": {
       "product_column": "RAW MATERIALS",

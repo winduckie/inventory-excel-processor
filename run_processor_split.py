@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-Excel Processor Runner - Easy Date Configuration
+Excel Processor Runner - Split Files Version (imports.xlsx + local.xlsx)
 
-This script makes it easy to run the Excel processor for a specific date folder.
+This script processes Excel data from split files:
+- imports.xlsx: Contains imported data (Sailling, Landed, For Pull out Return, UNSERVED)
+- local.xlsx: Contains local unserved data
+
 Simply change the DATE variable below to process different date folders.
 """
 
-from combined_processor import CombinedProcessor
+from combined_processor_split import CombinedProcessorSplit
 import os
 import sys
 from datetime import datetime
-import pandas as pd # Added for enhanced pivot table
+import pandas as pd
 
 # =============================================================================
 # CONFIGURATION - CHANGE THIS DATE TO PROCESS DIFFERENT FOLDERS
@@ -18,15 +21,15 @@ import pandas as pd # Added for enhanced pivot table
 DATE = "20250924"  # Change this to your desired date (YYYYMMDD format)
 # =============================================================================
 
-def run_processor(date_str):
+def run_processor_split(date_str):
     """
-    Run the Excel processor for a specific date folder.
+    Run the Excel processor for a specific date folder with split files.
     
     Args:
         date_str (str): Date in YYYYMMDD format
     """
-    print("🚀 Excel Processor Runner")
-    print("=" * 50)
+    print("🚀 Excel Processor Runner - Split Files Version")
+    print("=" * 60)
     print(f"📅 Processing date: {date_str}")
     print(f"📁 Input folder: input/{date_str}/")
     print(f"📁 Output folder: processed_data/{date_str}/")
@@ -40,12 +43,17 @@ def run_processor(date_str):
         return False
     
     # Check if required files exist
-    delivery_file = os.path.join(input_dir, "deliveries.xlsx")
+    imports_file = os.path.join(input_dir, "imports.xlsx")
+    local_file = os.path.join(input_dir, "local.xlsx")
     inventory_file = os.path.join(input_dir, "inventory.xlsx")
     global_usage_file = os.path.join(input_dir, "global_usage.csv")
     
-    if not os.path.exists(delivery_file):
-        print(f"❌ Delivery file not found: {delivery_file}")
+    if not os.path.exists(imports_file):
+        print(f"❌ Imports file not found: {imports_file}")
+        return False
+    
+    if not os.path.exists(local_file):
+        print(f"❌ Local file not found: {local_file}")
         return False
     
     if not os.path.exists(inventory_file):
@@ -62,7 +70,8 @@ def run_processor(date_str):
         global_usage_file = None
     
     print("✅ Input files found:")
-    print(f"  📊 Deliveries: {delivery_file}")
+    print(f"  📊 Imports: {imports_file}")
+    print(f"  🏠 Local: {local_file}")
     print(f"  📦 Inventory: {inventory_file}")
     if global_usage_file:
         print(f"  🌍 Global Usage: {global_usage_file}")
@@ -70,8 +79,8 @@ def run_processor(date_str):
     
     try:
         # Initialize the processor
-        print("🔄 Initializing processor...")
-        processor = CombinedProcessor(delivery_file, inventory_file, global_usage_file)
+        print("🔄 Initializing split processor...")
+        processor = CombinedProcessorSplit(imports_file, local_file, inventory_file, global_usage_file)
         
         # Show detected date and output directory
         print(f"📅 Detected date: {processor.input_date}")
@@ -95,7 +104,9 @@ def run_processor(date_str):
             print(f"  Rows: {info['rows']}")
             print(f"  Columns: {info['columns']}")
             if info['column_names']:
-                print(f"  Columns: {', '.join(info['column_names'])}")
+                # Convert all column names to strings to avoid TypeError
+                column_names = [str(col) for col in info['column_names']]
+                print(f"  Columns: {', '.join(column_names)}")
         
         # Save processed data
         print(f"\n💾 Saving processed data to {processor.output_dir}...")
@@ -112,17 +123,22 @@ def run_processor(date_str):
             print(f"✅ Saved combined data to {combined_file}")
             print(f"📊 Total rows: {len(combined_df)}")
             print(f"📈 Status breakdown: {combined_df['STATUS'].value_counts().to_dict()}")
-            print(f"🏷️  Category breakdown: {combined_df['CATEGORY'].value_counts().to_dict()}")
+            # Check if CATEGORY column exists before trying to access it
+            if 'CATEGORY' in combined_df.columns:
+                print(f"🏷️  Category breakdown: {combined_df['CATEGORY'].value_counts().to_dict()}")
+            else:
+                print("🏷️  No CATEGORY column found in combined data")
             
             # Create and save pivot table
             print(f"\n📊 Creating pivot table...")
             
-            # Check for N/A categories before creating pivot table
-            na_count = len(combined_df[combined_df['CATEGORY'] == 'N/A'])
-            if na_count > 0:
-                na_products = combined_df[combined_df['CATEGORY'] == 'N/A']['PRODUCT'].unique()
-                print(f"⚠️  Found {na_count} products with 'N/A' category - these will be excluded from pivot table")
-                print(f"📋 N/A products: {', '.join(sorted(na_products))}")
+            # Check for N/A categories before creating pivot table (if CATEGORY column exists)
+            if 'CATEGORY' in combined_df.columns:
+                na_count = len(combined_df[combined_df['CATEGORY'] == 'N/A'])
+                if na_count > 0:
+                    na_products = combined_df[combined_df['CATEGORY'] == 'N/A']['PRODUCT'].unique()
+                    print(f"⚠️  Found {na_count} products with 'N/A' category - these will be excluded from pivot table")
+                    print(f"📋 N/A products: {', '.join(sorted(na_products))}")
             
             pivot_table = processor.create_pivot_table(combined_df)
             
@@ -180,11 +196,12 @@ def show_available_dates():
     print("📂 Available date folders:")
     for date in sorted(dates):
         # Check if files exist
-        delivery_exists = os.path.exists(f"input/{date}/deliveries.xlsx")
+        imports_exists = os.path.exists(f"input/{date}/imports.xlsx")
+        local_exists = os.path.exists(f"input/{date}/local.xlsx")
         inventory_exists = os.path.exists(f"input/{date}/inventory.xlsx")
         
-        status = "✅" if delivery_exists and inventory_exists else "⚠️"
-        print(f"  {status} {date} - {delivery_exists and inventory_exists and 'Ready' or 'Missing files'}")
+        status = "✅" if imports_exists and local_exists and inventory_exists else "⚠️"
+        print(f"  {status} {date} - {imports_exists and local_exists and inventory_exists and 'Ready' or 'Missing files'}")
 
 def main():
     """Main function."""
@@ -206,13 +223,13 @@ def main():
     print()
     
     # Run the processor
-    success = run_processor(DATE)
+    success = run_processor_split(DATE)
     
     if success:
         print("\n🎯 To process a different date, either:")
         print(f"1. Change the DATE variable in this script (currently: {DATE})")
-        print(f"2. Run: python run_processor.py YYYYMMDD")
-        print(f"3. Run: python run_processor.py {DATE}")
+        print(f"2. Run: python run_processor_split.py YYYYMMDD")
+        print(f"3. Run: python run_processor_split.py {DATE}")
 
 if __name__ == "__main__":
     main()
