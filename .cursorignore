@@ -1,0 +1,19 @@
+# Exclude directories from automatic reading by agents
+# These should only be read when specifically referenced
+
+# Log files - not needed for context
+logs/
+
+# Archive - historical data
+archive/
+
+# Input/output data - only read when referenced
+input/
+processed_data/
+
+# Python cache
+__pycache__/
+
+# Extra code files - only read when specifically asked for
+extra_code/
+
