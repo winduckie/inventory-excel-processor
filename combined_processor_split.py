@@ -40,6 +40,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info(f"Logging to file: {log_filename}")
 
+def _update_header_aliases(table_key: str, alias_name: str, expected_name: str):
+    """Persist discovered header aliases to config/header_aliases.json."""
+    try:
+        os.makedirs('config', exist_ok=True)
+        aliases_path = os.path.join('config', 'header_aliases.json')
+        data = {}
+        if os.path.exists(aliases_path):
+            import json as _json
+            with open(aliases_path, 'r', encoding='utf-8') as f:
+                try:
+                    data = _json.load(f) or {}
+                except Exception:
+                    data = {}
+        table_aliases = data.get(table_key, {})
+        names = set(table_aliases.get(expected_name, []))
+        if alias_name not in names:
+            names.add(alias_name)
+            table_aliases[expected_name] = sorted(names)
+            data[table_key] = table_aliases
+            import json as _json
+            with open(aliases_path, 'w', encoding='utf-8') as f:
+                _json.dump(data, f, indent=2, ensure_ascii=False)
+            logger.info(f"Saved header alias for {table_key}: '{alias_name}' -> '{expected_name}'")
+    except Exception as e:
+        logger.warning(f"Failed to update header aliases file: {e}")
+
 class CombinedProcessorSplit(CombinedProcessor):
     """
     A class to process and combine delivery data from split files (imports.xlsx + local.xlsx),
@@ -150,8 +176,41 @@ class CombinedProcessorSplit(CombinedProcessor):
             if header_row is not None:
                 # Use the found header row
                 df = df.iloc[header_row:].copy()
-                df.columns = df.iloc[0]
+                # Set headers from the detected row with cleanup
+                raw_headers = list(df.iloc[0])
+                clean_headers = []
+                for i, h in enumerate(raw_headers):
+                    if pd.notna(h) and str(h).strip() != '':
+                        clean_headers.append(str(h).strip())
+                    else:
+                        clean_headers.append(f'Column_{i}')
                 df = df.iloc[1:].reset_index(drop=True)
+                df.columns = clean_headers
+
+                # Normalize common UNSERVED LOCAL header variations to expected mapping keys
+                expected_product = 'RAW MATERIALS'
+                expected_qty = 'STILL TO BE DELIVERED (in kilos)'
+                lower_to_actual = {str(c).strip().lower(): c for c in df.columns}
+                # Map by case-insensitive match
+                rename_map = {}
+                if expected_product.lower() in lower_to_actual:
+                    rename_map[lower_to_actual[expected_product.lower()]] = expected_product
+                else:
+                    # Try looser matching for product column
+                    for key, actual in lower_to_actual.items():
+                        if 'raw' in key and 'material' in key:
+                            rename_map[actual] = expected_product
+                            break
+                if expected_qty.lower() in lower_to_actual:
+                    rename_map[lower_to_actual[expected_qty.lower()]] = expected_qty
+                else:
+                    # Try looser matching for quantity column
+                    for key, actual in lower_to_actual.items():
+                        if 'still' in key and 'deliver' in key and ('kilo' in key or 'kg' in key):
+                            rename_map[actual] = expected_qty
+                            break
+                if rename_map:
+                    df = df.rename(columns=rename_map)
                 logger.info(f"Found header at row {header_row}")
             else:
                 logger.warning("Could not find header row, using first row as header")
@@ -313,18 +372,90 @@ class CombinedProcessorSplit(CombinedProcessor):
             df = pd.read_excel(self.local_file, sheet_name=sheet_name)
             logger.info(f"Raw UNSERVED LOCAL data shape: {df.shape}")
             
-            # Find the header row (look for row with 'RAW MATERIALS' or similar)
+            # Find the header row robustly, anchoring on exact RAW MATERIALS where possible
             header_row = None
+            expected_product = 'RAW MATERIALS'
+            expected_qty = 'STILL TO BE DELIVERED (in kilos)'
+            # Priority 1: exact match for RAW MATERIALS cell in any column (case-insensitive, stripped)
             for idx, row in df.iterrows():
-                if any('RAW MATERIALS' in str(cell).upper() for cell in row if pd.notna(cell)):
-                    header_row = idx
+                found = False
+                for cell in row:
+                    if pd.notna(cell) and str(cell).strip().upper() == expected_product:
+                        header_row = idx
+                        found = True
+                        break
+                if found:
                     break
-            
+
+            # Priority 2: row that already contains both expected headers exactly
+            if header_row is None:
+                max_scan = min(150, len(df))
+                for idx in range(max_scan):
+                    vals = [str(v).strip() for v in df.iloc[idx] if pd.notna(v)]
+                    if expected_product in vals and expected_qty in vals:
+                        header_row = idx
+                        break
+
+            # Priority 3: first row with at least 2 non-empty, non-numeric text-like cells
+            if header_row is None:
+                max_scan = min(200, len(df))
+                for idx in range(max_scan):
+                    row = df.iloc[idx]
+                    text_like = 0
+                    for cell in row:
+                        if pd.notna(cell):
+                            s = str(cell).strip()
+                            if s and not s.replace('.', '').replace('-', '').replace(',', '').isdigit():
+                                text_like += 1
+                    if text_like >= 2:
+                        header_row = idx
+                        break
+
             if header_row is not None:
                 # Use the found header row
                 df = df.iloc[header_row:].copy()
-                df.columns = df.iloc[0]
+                # Set headers from the detected row with cleanup
+                raw_headers = list(df.iloc[0])
+                clean_headers = []
+                for i, h in enumerate(raw_headers):
+                    if pd.notna(h) and str(h).strip() != '':
+                        clean_headers.append(str(h).strip())
+                    else:
+                        clean_headers.append(f'Column_{i}')
                 df = df.iloc[1:].reset_index(drop=True)
+                df.columns = clean_headers
+
+                # Normalize headers: exact first, then fuzzy; record fuzzy aliases
+                lower_to_actual = {str(c).strip().lower(): c for c in df.columns}
+                rename_map = {}
+                # Exact by lower for product
+                if expected_product.lower() in lower_to_actual:
+                    src = lower_to_actual[expected_product.lower()]
+                    if src != expected_product:
+                        rename_map[src] = expected_product
+                # Fuzzy product
+                if expected_product not in df.columns:
+                    for key, actual in lower_to_actual.items():
+                        if 'raw' in key and 'material' in key:
+                            rename_map[actual] = expected_product
+                            if actual != expected_product:
+                                _update_header_aliases('UNSERVED_LOCAL', actual, expected_product)
+                            break
+                # Exact by lower for quantity
+                if expected_qty.lower() in lower_to_actual:
+                    src = lower_to_actual[expected_qty.lower()]
+                    if src != expected_qty:
+                        rename_map[src] = expected_qty
+                # Fuzzy quantity
+                if expected_qty not in df.columns:
+                    for key, actual in lower_to_actual.items():
+                        if 'still' in key and 'deliver' in key and ('kilo' in key or 'kg' in key):
+                            rename_map[actual] = expected_qty
+                            if actual != expected_qty:
+                                _update_header_aliases('UNSERVED_LOCAL', actual, expected_qty)
+                            break
+                if rename_map:
+                    df = df.rename(columns=rename_map)
                 logger.info(f"Found header at row {header_row}")
             else:
                 logger.warning("Could not find header row, using first row as header")
@@ -332,6 +463,36 @@ class CombinedProcessorSplit(CombinedProcessor):
             # Clean up the data
             df = df.dropna(how='all')  # Remove completely empty rows
             df = df.reset_index(drop=True)
+
+            # Validate required columns post-mapping; if missing, log and terminate
+            required = self.column_mapping.get('UNSERVED_LOCAL', {})
+            prod_col = required.get('product_column')
+            qty_col = required.get('quantity_column')
+            missing_cols = []
+            if prod_col and prod_col not in df.columns:
+                missing_cols.append(prod_col)
+            if qty_col and qty_col not in df.columns:
+                missing_cols.append(qty_col)
+            if missing_cols:
+                logger.error(f"UNSERVED LOCAL table failed header validation. Missing: {missing_cols}. Columns seen: {list(df.columns)}")
+                raise ValueError("UNSERVED LOCAL header mapping failed; terminating process.")
+            
+            # Handle merged cells in RAW MATERIALS column using pandas forward fill
+            # Only fill for rows that have data (non-empty SUPPLIER) to avoid filling summary rows
+            if 'RAW MATERIALS' in df.columns:
+                # Forward fill RAW MATERIALS to fill merged cells
+                # This will propagate the value down until it hits a new non-empty value or end of dataframe
+                df['RAW MATERIALS'] = df['RAW MATERIALS'].ffill()
+                
+                # Clear RAW MATERIALS for summary rows (where SUPPLIER is empty)
+                # This ensures summary rows don't get incorrectly filled with values from above
+                if 'SUPPLIER' in df.columns:
+                    supplier_empty_mask = df['SUPPLIER'].isna() | (df['SUPPLIER'] == '')
+                    df.loc[supplier_empty_mask, 'RAW MATERIALS'] = ''
+                    
+                    logger.info("Applied forward fill for RAW MATERIALS column (respecting data/summary row boundaries)")
+                else:
+                    logger.info("Applied forward fill for RAW MATERIALS column (no SUPPLIER column to check)")
             
             # Add STATUS column
             df['STATUS'] = 'UNSERVED LOCAL'

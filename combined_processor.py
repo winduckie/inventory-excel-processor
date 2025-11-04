@@ -1051,6 +1051,58 @@ class CombinedProcessor:
                 logger.info("Status breakdown in combined data:")
                 for status, count in status_counts.items():
                     logger.info(f"  {status}: {count} products")
+
+                # Final summary log: counts per requested statuses and uncategorized mapping entries
+                try:
+                    statuses_of_interest = ['SAILING', 'LANDED', 'PULLOUT', 'UNSERVED IMPORTED', 'UNSERVED LOCAL']
+                    interest_counts = {}
+                    for status in statuses_of_interest:
+                        # Count rows with matching status (case-insensitive matching)
+                        matching_rows = final_df[final_df['STATUS'].str.upper() == status.upper()]
+                        interest_counts[status] = int(matching_rows.shape[0])
+
+                    # Count uncategorized entries in product_categories mapping file
+                    # Only count blank/empty categories, not 'N/A' (N/A means acknowledged as not needing a category)
+                    uncategorized_count = 0
+                    try:
+                        import csv
+                        with open('config/product_categories.csv', 'r', newline='', encoding='utf-8') as f:
+                            reader = csv.DictReader(f)
+                            for row in reader:
+                                category_val = (row.get('Category') or '').strip()
+                                if category_val == '':  # Only count blank, not N/A
+                                    uncategorized_count += 1
+                    except FileNotFoundError:
+                        logger.warning('config/product_categories.csv not found when counting uncategorized entries')
+                    except Exception as e:
+                        logger.warning(f"Error reading product_categories.csv: {e}")
+
+                    logger.info('=' * 60)
+                    logger.info('=== FINAL DATA SUMMARY ===')
+                    logger.info(f"Entries by status:")
+                    logger.info(f"  SAILING: {interest_counts.get('SAILING', 0)}")
+                    logger.info(f"  LANDED: {interest_counts.get('LANDED', 0)}")
+                    logger.info(f"  PULLOUT: {interest_counts.get('PULLOUT', 0)}")
+                    logger.info(f"  UNSERVED IMPORTED: {interest_counts.get('UNSERVED IMPORTED', 0)}")
+                    logger.info(f"  UNSERVED LOCAL: {interest_counts.get('UNSERVED LOCAL', 0)}")
+                    logger.info(f"Uncategorized entries in product_categories.csv: {uncategorized_count}")
+                    logger.info('=' * 60)
+                    
+                    # Also print to console for visibility
+                    print('\n' + '=' * 60)
+                    print('=== FINAL DATA SUMMARY ===')
+                    print(f"Entries by status:")
+                    print(f"  SAILING: {interest_counts.get('SAILING', 0)}")
+                    print(f"  LANDED: {interest_counts.get('LANDED', 0)}")
+                    print(f"  PULLOUT: {interest_counts.get('PULLOUT', 0)}")
+                    print(f"  UNSERVED IMPORTED: {interest_counts.get('UNSERVED IMPORTED', 0)}")
+                    print(f"  UNSERVED LOCAL: {interest_counts.get('UNSERVED LOCAL', 0)}")
+                    print(f"Uncategorized entries in product_categories.csv: {uncategorized_count}")
+                    print('=' * 60)
+                except Exception as e:
+                    logger.error(f"Failed to log final data summary: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
             
             return final_df
         else:
@@ -1599,7 +1651,6 @@ class CombinedProcessor:
                                 if data_row_idx >= 0 and data_row_idx < len(enhanced_pivot_df):
                                     # Get the actual TOTAL value from the data
                                     total_value = enhanced_pivot_df.iloc[data_row_idx]['TOTAL']
-                                    logger.debug(f"Row {row}, data_row_idx {data_row_idx}, total_value: {total_value}")
                                     if total_value == 0 or total_value == 0.0 or pd.isna(total_value):
                                         # Only apply yellow highlighting if this month's projection will be negative
                                         # Get the monthly usage value
@@ -1612,7 +1663,6 @@ class CombinedProcessor:
                                                 # Apply yellow highlighting for zero inventory with negative projections
                                                 yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
                                                 cell.fill = yellow_fill
-                                                logger.info(f"Applied yellow highlighting to row {row} month {month_num} (projected_value: {projected_value}) - no inventory from start, will show deficit")
                                         # If usage_value is 0, don't apply yellow highlighting (no deficit to show)
                                     else:
                                         # Check if this projection will be negative (will run out of existing inventory)
@@ -1626,7 +1676,6 @@ class CombinedProcessor:
                                                 # Apply red highlighting for negative projections (will run out)
                                                 red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
                                                 cell.fill = red_fill
-                                                logger.info(f"Applied red highlighting to row {row} month {month_num} (projected_value: {projected_value}) - will run out")
                             except Exception as e:
                                 logger.warning(f"Error checking total value for row {row}: {e}")
                                 # Fallback to checking the cell value if we can't get the data
@@ -1640,12 +1689,12 @@ class CombinedProcessor:
                                         # This ensures we don't miss highlighting important deficit scenarios
                                         yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
                                         cell.fill = yellow_fill
-                                        logger.info(f"Applied yellow highlighting to row {row} month {month_num} via fallback (cell_value: {total_cell_value})")
+                                        # highlight applied (log suppressed)
                                     except:
                                         # If we can't determine month, apply yellow highlighting
                                         yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
                                         cell.fill = yellow_fill
-                                        logger.info(f"Applied yellow highlighting to row {row} via fallback (cell_value: {total_cell_value})")
+                                        # highlight applied (log suppressed)
                         
                         # Add Excel formula for projections
                         if cell.value != 0 and cell.value != 0.0:

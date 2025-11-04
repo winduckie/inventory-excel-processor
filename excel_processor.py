@@ -764,6 +764,31 @@ class ExcelProcessor:
                     print(f"  - {product}")
                 print("Please edit product_categories.csv to add categories for these products.")
             
+            # Final summary log: counts per status and uncategorized mapping entries
+            try:
+                # Status counts for specific statuses
+                statuses_of_interest = ['SAILING', 'LANDED', 'PULLOUT', 'UNSERVED IMPORTED', 'UNSERVED LOCAL']
+                status_counts = {s: int(final_df[final_df['STATUS'] == s].shape[0]) for s in statuses_of_interest}
+
+                # Count uncategorized entries in product_categories mapping file
+                uncategorized_count = 0
+                try:
+                    import csv
+                    with open('config/product_categories.csv', 'r', newline='', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            category_val = (row.get('Category') or '').strip()
+                            if category_val == '' or category_val.upper() == 'N/A':
+                                uncategorized_count += 1
+                except FileNotFoundError:
+                    logger.warning('config/product_categories.csv not found when counting uncategorized entries')
+
+                logger.info('=== FINAL DATA SUMMARY ===')
+                logger.info(f"Entries by status: SAILING={status_counts['SAILING']}, LANDED={status_counts['LANDED']}, PULLOUT={status_counts['PULLOUT']}, UNSERVED LOCAL={status_counts['UNSERVED LOCAL']}")
+                logger.info(f"Uncategorized entries in product_categories.csv: {uncategorized_count}")
+            except Exception as e:
+                logger.warning(f"Failed to log final data summary: {e}")
+
             return final_df
         else:
             logger.warning("No data to combine")

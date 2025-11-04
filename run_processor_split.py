@@ -170,6 +170,42 @@ def run_processor_split(date_str):
                         print("❌ Failed to create enhanced pivot table")
             else:
                 print("❌ Failed to create pivot table")
+            
+            # Print final summary at the end for visibility
+            if not combined_df.empty:
+                try:
+                    statuses_of_interest = ['SAILING', 'LANDED', 'PULLOUT', 'UNSERVED IMPORTED', 'UNSERVED LOCAL']
+                    interest_counts = {}
+                    for status in statuses_of_interest:
+                        matching_rows = combined_df[combined_df['STATUS'].str.upper() == status.upper()]
+                        interest_counts[status] = int(matching_rows.shape[0])
+                    
+                    # Count uncategorized entries
+                    # Only count blank/empty categories, not 'N/A' (N/A means acknowledged as not needing a category)
+                    uncategorized_count = 0
+                    try:
+                        import csv
+                        with open('config/product_categories.csv', 'r', newline='', encoding='utf-8') as f:
+                            reader = csv.DictReader(f)
+                            for row in reader:
+                                category_val = (row.get('Category') or '').strip()
+                                if category_val == '':  # Only count blank, not N/A
+                                    uncategorized_count += 1
+                    except Exception:
+                        pass
+                    
+                    print('\n' + '=' * 60)
+                    print('=== FINAL DATA SUMMARY ===')
+                    print(f"Entries by status:")
+                    print(f"  SAILING: {interest_counts.get('SAILING', 0)}")
+                    print(f"  LANDED: {interest_counts.get('LANDED', 0)}")
+                    print(f"  PULLOUT: {interest_counts.get('PULLOUT', 0)}")
+                    print(f"  UNSERVED IMPORTED: {interest_counts.get('UNSERVED IMPORTED', 0)}")
+                    print(f"  UNSERVED LOCAL: {interest_counts.get('UNSERVED LOCAL', 0)}")
+                    print(f"Uncategorized entries in product_categories.csv: {uncategorized_count}")
+                    print('=' * 60)
+                except Exception as e:
+                    print(f"⚠️  Could not generate final summary: {e}")
         
         print(f"\n🎉 Processing complete!")
         print(f"📁 Check your results in: {processor.output_dir}")
