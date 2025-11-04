@@ -1,19 +1,26 @@
-# Exclude directories from automatic reading by agents
-# These should only be read when specifically referenced
+# Exclude everything from automatic indexing
+# Agents should only read files when explicitly needed based on the question
+# This maximizes token efficiency while still allowing explicit file reads
 
-# Log files - not needed for context
-logs/
-
-# Archive - historical data
-archive/
-
-# Input/output data - only read when referenced
+# All data directories
 input/
 processed_data/
+archive/
 
-# Python cache
+# Logs and cache
+logs/
 __pycache__/
 
-# Extra code files - only read when specifically asked for
+# Extra code files
 extra_code/
+
+# Documentation
+README*.md
+
+# Core code files - exclude from auto-indexing but can be read when needed
+# (Agents will read these files explicitly when working on tasks)
+run_processor_split.py
+combined_processor_split.py
+combined_processor.py
+config/
 
