@@ -1761,8 +1761,13 @@ class CombinedProcessor:
                                         inventory = float(inventory_value) if pd.notna(inventory_value) else 0.0
                                         global_usage = float(global_usage_value) if pd.notna(global_usage_value) else 0.0
                                         
-                                        # Apply conditional highlighting only if inventory > 0
-                                        if inventory > 0 and global_usage > 0:
+                                        # Apply conditional highlighting
+                                        if inventory <= 0:
+                                            # Light red: inventory is 0 or negative
+                                            light_red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+                                            cell.fill = light_red_fill
+                                            cell.font = Font(bold=True)
+                                        elif global_usage > 0:
                                             if inventory < global_usage:
                                                 # Red: inventory is less than Global Usage
                                                 red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
