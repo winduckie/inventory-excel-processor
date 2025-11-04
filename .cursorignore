@@ -1,26 +1,19 @@
-# Exclude everything from automatic indexing
-# Agents should only read files when explicitly needed based on the question
-# This maximizes token efficiency while still allowing explicit file reads
+# Exclude from automatic indexing - only read when explicitly needed
+# Core code files (run_processor_split.py, combined_processor*.py, config/) are NOT excluded
+# so they can be edited normally and are available for codebase understanding
 
-# All data directories
+# Data directories - only read when referenced
 input/
 processed_data/
 archive/
 
-# Logs and cache
+# Logs and cache - never needed for context
 logs/
 __pycache__/
 
-# Extra code files
+# Extra code files - only read when specifically asked for
 extra_code/
 
-# Documentation
+# Documentation - exclude to reduce tokens (can be read if needed)
 README*.md
-
-# Core code files - exclude from auto-indexing but can be read when needed
-# (Agents will read these files explicitly when working on tasks)
-run_processor_split.py
-combined_processor_split.py
-combined_processor.py
-config/
 

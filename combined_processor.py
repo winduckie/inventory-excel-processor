@@ -1741,6 +1741,51 @@ class CombinedProcessor:
                             if cell.value < 0:
                                 cell.font = Font(color="FF0000", bold=True)
                     
+                    # Format INVENTORY column with conditional highlighting
+                    elif col_header == 'INVENTORY':
+                        # Skip the TOTAL row itself
+                        category_name = worksheet.cell(row=row, column=1).value
+                        if category_name != 'TOTAL':
+                            try:
+                                # Get the actual data value from the enhanced pivot table using row index
+                                data_row_idx = row - 2  # Excel row 2 = data index 0
+                                if data_row_idx >= 0 and data_row_idx < len(enhanced_pivot_df):
+                                    # Get INVENTORY value
+                                    inventory_value = enhanced_pivot_df.iloc[data_row_idx]['INVENTORY']
+                                    
+                                    # Get GLOBAL USAGE value for this row
+                                    global_usage_value = enhanced_pivot_df.iloc[data_row_idx]['GLOBAL USAGE']
+                                    
+                                    # Convert to numeric, handling any non-numeric values
+                                    try:
+                                        inventory = float(inventory_value) if pd.notna(inventory_value) else 0.0
+                                        global_usage = float(global_usage_value) if pd.notna(global_usage_value) else 0.0
+                                        
+                                        # Apply conditional highlighting only if inventory > 0
+                                        if inventory > 0 and global_usage > 0:
+                                            if inventory < global_usage:
+                                                # Red: inventory is less than Global Usage
+                                                red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+                                                cell.fill = red_fill
+                                                cell.font = Font(bold=True, color="FFFFFF")
+                                            elif inventory < (2 * global_usage):
+                                                # Yellow: inventory is less than 2x Global Usage
+                                                yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+                                                cell.fill = yellow_fill
+                                                cell.font = Font(bold=True)
+                                    except (ValueError, TypeError):
+                                        # If values can't be converted to numeric, skip highlighting
+                                        pass
+                            except Exception as e:
+                                logger.warning(f"Error checking inventory/usage values for row {row}: {e}")
+                        
+                        # Format the cell value (standard formatting)
+                        if cell.value == 0 or cell.value == 0.0:
+                            cell.value = '-'
+                            cell.font = Font(color="808080")
+                        elif isinstance(cell.value, (int, float)) and cell.value > 0:
+                            cell.number_format = '#,##0'
+                    
                     # Format regular data cells
                     else:
                         if cell.value == 0 or cell.value == 0.0:
